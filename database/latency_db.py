@@ -9,7 +9,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # Use a separate database for latency logs
-LATENCY_DATABASE_URL = 'sqlite:///db/latency.db'
+LATENCY_DATABASE_URL = os.getenv('DATABASE_URL')
 
 latency_engine = create_engine(
     LATENCY_DATABASE_URL,

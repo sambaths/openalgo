@@ -9,7 +9,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # Use a separate database for logs
-LOGS_DATABASE_URL = 'sqlite:///db/logs.db'
+LOGS_DATABASE_URL = os.getenv('DATABASE_URL')
 
 logs_engine = create_engine(
     LOGS_DATABASE_URL,
