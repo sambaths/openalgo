@@ -1,0 +1,50 @@
+# META - TRADER
+
+env: 'dev' # ['dev', 'prod']
+
+# Postgres Table Names
+tables:
+  market_data: market_data
+  stock_signals: stock_signals
+  trade_history: trade_history
+  trade_log: trade_log
+  active_trades: active_trades
+
+capital_management:
+  starting_capital: 200000
+  max_allocation: 0.3
+
+trading_setting:
+  trading_date: '09-05-2025'
+  confirmation_count: 3 # Number of Confirmation Candles to wait for before entering a trade
+  max_trade_duration: 3800 # Number of seconds to hold a trade
+  # None or Integer value in seconds
+  cooling_period: None 
+  # Simulation Related Keys
+  simulation:  True
+  simulation_type: 'historical'
+  simulation_date: '09-05-2025'
+  simulation_stocks: None
+  symbols: ['NATCOPHARM', 'ADANIGREEN', 'INFY', 'BAJFINANCE', 'TATACONSUM', 'JSWSTEEL', 'SHRIRAMFIN', 'AXISBANK', 'MARUTI', 'ADANIPORTS', 'COALINDIA', 'BPCL'] #, 'NESTLEIND', 'LT', 'RELIANCE', 'SBILIFE', 'DRREDDY', 'TATASTEEL', 'BAJAJFINSV', 'SBIN', 'HINDALCO', 'BHARTIARTL', 'EICHERMOT', 'TITAN', 'ADANIENT', 'TATAMOTORS', 'ICICIBANK', 'HDFCLIFE', 'GRASIM', 'TCS', 'ASIANPAINT', 'HEROMOTOCO', 'SUNPHARMA', 'ITC', 'BAJAJ-AUTO', 'HINDUNILVR', 'BRITANNIA', 'M&M', 'ULTRACEMCO', 'BEL', 'TRENT', 'INDUSINDBK']
+  slippage: 0.01 # Slippage in percentage
+  commission: 0.0001 # Commission in percentage
+  aggregation_resolution: 1 # Aggregation Resolution for the Market Data
+  resolution: 1 # Resolution for data fetch via Market Data
+
+scanners:
+  top: 10 # Stocks to pick from scanner
+  mcap: 10000 # In Cr
+
+
+risk_management:
+  max_active_trades: 3 # Max Number of Active trades in the Session
+  risk_reward_ratio: 2.2 # Risk Reward Ration to Utilized for each Trade 
+  risk_offset: 0.02 # Used to Identify a Stop Loss based on the Entry Price - SL = EP +- (EP * risk_offset)
+  trailing_stop_percent: 0.01 # Percent by which the Stop Loss should be moved to trail the best price to reduce risk
+  risk_per_trade: 0.03 # Used to Calculate the Position Size based on Fixed Fractional - % Amount we are willing to risk per trade
+  max_allocation: 0.3 # Max Allocation of Capital for a Single Trade
+  max_loss_cap_stock: null # Max Loss after which Trading is stoppped
+  max_profit_cap_stock: null # Max Profit after with trading is stopped
+  max_loss_cap: 1000
+  max_profit_cap: null
+  force_exit_on_cap: False
