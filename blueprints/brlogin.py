@@ -8,6 +8,9 @@ import json
 import jwt
 import base64
 import hashlib
+from broker.fyers.api.auth_api import authenticate_broker
+from datetime import datetime
+import pytz
 
 BROKER_API_KEY = get_broker_api_key()
 LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
@@ -492,3 +495,20 @@ def getKotakOTP(userid,access_token):
     data = res.read()
     
     return 'success'
+
+@brlogin_bp.route('/fyers/totp_login', methods=['POST'])
+def fyers_totp_login():
+    try:
+        access_token, response = authenticate_broker(request_token=None)
+        if access_token:
+            session['logged_in'] = True
+            session['broker'] = 'fyers'
+            # Set login_time in IST
+            now_utc = datetime.now(pytz.timezone('UTC'))
+            now_ist = now_utc.astimezone(pytz.timezone('Asia/Kolkata'))
+            session['login_time'] = now_ist.isoformat()
+            return jsonify({'status': 'success', 'access_token': access_token})
+        else:
+            return jsonify({'status': 'error', 'message': response['message']}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
