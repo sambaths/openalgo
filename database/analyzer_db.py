@@ -14,9 +14,11 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 
 engine = create_engine(
     DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
+    pool_size=300,
+    max_overflow=300,
+    pool_timeout=10,
+    pool_recycle=1800,
+    pool_pre_ping=True
 )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
@@ -79,4 +81,5 @@ def async_log_analyzer(request_data, response_data, api_type='placeorder'):
         print(f"Error saving analyzer log: {e}")
         db_session.rollback()
     finally:
+        db_session.close()
         db_session.remove()
