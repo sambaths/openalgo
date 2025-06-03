@@ -6,6 +6,8 @@ from logger import logger
 logger.setLevel(getattr(logging, os.environ["DEBUG_LEVEL"].upper(), None))
 from threading import Thread
 from datetime import datetime
+import time
+import json
 
 from db import setup, DBHandler, MarketData, StockSignals
 from strategy.trendscore import EnhancedTrendScoreStrategy
@@ -38,7 +40,7 @@ class MarketDataHandler:
     """
 
     def __init__(
-        self, signal_processor=None, aggregation_resolution=None, risk_manager=None
+        self, signal_processor=None, aggregation_resolution=None, risk_manager=None, shared_state=None, shared_lock=None
     ):
         logger.info("Initializing MarketDataHandler.")
         # Create process-local database connection
@@ -53,12 +55,100 @@ class MarketDataHandler:
         self.aggregated_data = {}
         self.signal_processors = {}  # Will create processors per symbol
         self.risk_manager = risk_manager
+        self.shared_state = shared_state
+        self.shared_lock = shared_lock
         logger.info("MarketDataHandler initialized.")
+
+    def check_incomplete_trades(self, symbol):
+        """
+        Check if there are incomplete trades for a symbol that need to be handled
+        
+        Args:
+            symbol: The symbol to check
+            
+        Returns:
+            dict: Dictionary with 'has_incomplete' and details about incomplete trades
+        """
+        if not self.shared_state or not self.shared_lock:
+            return {"has_incomplete": False}
+            
+        incomplete_info = {
+            "has_incomplete": False,
+            "entry": None,
+            "exit": None, 
+            "take_profit": None
+        }
+        
+        try:
+            with self.shared_lock:
+                # Check for incomplete entry trades
+                incomplete_entry = dict(self.shared_state.get("incomplete_entry_trades", {}))
+                if symbol in incomplete_entry:
+                    incomplete_info["has_incomplete"] = True
+                    incomplete_info["entry"] = incomplete_entry[symbol]
+                    
+                # Check for incomplete exit trades  
+                incomplete_exit = dict(self.shared_state.get("incomplete_exit_trades", {}))
+                if symbol in incomplete_exit:
+                    incomplete_info["has_incomplete"] = True
+                    incomplete_info["exit"] = incomplete_exit[symbol]
+                    
+                # Check for incomplete take_profit trades
+                incomplete_tp = dict(self.shared_state.get("incomplete_takeprofit_trades", {}))
+                if symbol in incomplete_tp:
+                    incomplete_info["has_incomplete"] = True
+                    incomplete_info["take_profit"] = incomplete_tp[symbol]
+                
+        except Exception as e:
+            logger.error(f"Error checking incomplete trades for {symbol}: {e}")
+            
+        return incomplete_info
+
+    def handle_exit_or_takeprofit_signal(self, symbol, new_signal):
+        """
+        Handle exit or take_profit signals, merging with incomplete trades if needed
+        
+        Args:
+            symbol: The symbol
+            new_signal: The new signal
+            
+        Returns:
+            dict: The signal to process (original or merged) or None to discard
+        """
+        signal_type = new_signal.get("type")
+        if signal_type not in ["exit", "take_profit"]:
+            return new_signal
+            
+        incomplete_info = self.check_incomplete_trades(symbol)
+        
+        # Check if there's an incomplete trade of the same type
+        incomplete_trade = incomplete_info.get(signal_type)
+        
+        if incomplete_trade:
+            # Merge relevant keys from previous signal to new signal
+            previous_signal = incomplete_trade["signal"]
+            merged_signal = new_signal.copy()
+            
+            # Copy relevant keys from previous signal that might be important
+            merge_keys = ["position_to_close", "stop_loss", "take_profit_price", "type", 'signal', 'position_size', 'current_position', 'starting_position_size', 'current_position_size', 'closed_position_size', 'remaining_position_size', 'status', 'note', 'trailing_stop_triggered', 'trailing_stop_level', 'auto_square_off']
+            for key in merge_keys:
+                if key in previous_signal and key not in merged_signal:
+                    merged_signal[key] = previous_signal[key]
+                    logger.info(f"Merged key '{key}' from incomplete {signal_type} trade for {symbol}")
+            
+            # Update attempt count
+            attempt_count = incomplete_trade.get("attempt_count", 1) + 1
+            logger.info(f"Retrying {signal_type} signal for {symbol} (attempt #{attempt_count})")
+            
+            return merged_signal
+        
+        return new_signal
 
     def process_queue(self):
         """
         Continuously processes the data queue.
         """
+        
         logger.info("MarketDataHandler process_queue started.")
         while self.running:
             batch = []
@@ -95,6 +185,7 @@ class MarketDataHandler:
         """
         Aggregates incoming market data over the specified resolution.
         """
+        logger.info(f"Aggregating data: {batch}")
         self.db_handler.insert_records(
             records=[MarketData(**records) for records in batch]
         )
@@ -295,7 +386,7 @@ class MarketDataHandler:
                 "upper_ckt"
             ],  # Upper circuit price
         }
-
+        logger.info(f"Emitting Aggregated data for {symbol}: {aggregated_record}")
         # Reset the aggregated data for the symbol
         del self.aggregated_data[symbol]
         return aggregated_record
@@ -340,15 +431,34 @@ class MarketDataHandler:
                             )
                             self.signal_processors[symbol]._discard_signal()
                             self.signal_processors[symbol]._reset_position_tracking()
-
+                    
+                    # Check for incomplete entry trades and discard signal BEFORE running
+                    incomplete_info = self.check_incomplete_trades(symbol)
+                    if incomplete_info.get("entry"):
+                        logger.info(f"Discarding signal for {symbol} BEFORE run() - incomplete entry trade exists: {incomplete_info['entry']}")
+                        try:
+                            self.signal_processors[symbol]._discard_signal()
+                            self.signal_processors[symbol]._reset_position_tracking()
+                            logger.info(f"Called _discard_signal() for {symbol} due to incomplete entry trade")
+                        except Exception as e:
+                            logger.error(f"Error calling _discard_signal() for {symbol}: {e}")
+                        # Continue to next symbol, don't run signal generation
+                        # continue
+                    
                     results = self.signal_processors[symbol].run(data)
                     logger.debug(f"Signal results for {symbol}: {results}")
                     if results:
-                        self.trade_signal_queue.put(results)
-                        result_copy = results.copy()
-                        if "trade_id" in result_copy:
-                            result_copy.pop("trade_id")
-                        self.db_handler.insert_records(StockSignals(**result_copy))
+                        # Apply signal management logic for exit/take_profit signals only
+                        processed_signal = self.apply_signal_management(symbol, results)
+                        
+                        if processed_signal:
+                            self.trade_signal_queue.put(processed_signal)
+                            result_copy = processed_signal.copy()
+                            if "trade_id" in result_copy:
+                                result_copy.pop("trade_id")
+                            self.db_handler.insert_records(StockSignals(**result_copy))
+                        else:
+                            logger.info(f"Signal for {symbol} was discarded due to incomplete trade management")
                 except Exception as e:
                     logger.error(
                         f"Error processing bar for {symbol}: {str(e)}", exc_info=True
@@ -358,6 +468,34 @@ class MarketDataHandler:
             except Exception as e:
                 logger.error(f"Error in batch processing: {str(e)}")
                 continue
+
+    def apply_signal_management(self, symbol, signal):
+        """
+        Apply signal management logic based on incomplete trades
+        Note: Entry signal discarding is handled before run() is called
+        
+        Args:
+            symbol: The symbol
+            signal: The generated signal
+            
+        Returns:
+            dict: The processed signal or None if discarded
+        """
+        if not signal:
+            return None
+            
+        signal_type = signal.get("type")
+        
+        # Entry signals are already handled before run() is called, so just pass through
+        if signal_type == "entry":
+            return signal
+            
+        # For exit and take_profit signals, handle merging with incomplete trades
+        elif signal_type in ["exit", "take_profit"]:
+            return self.handle_exit_or_takeprofit_signal(symbol, signal)
+            
+        # For other signal types, pass through
+        return signal
 
     def stop(self):
         """Stops the processing loop and cleans up resources."""
@@ -401,6 +539,8 @@ class Worker(Process):
         margin_dict,
         capital_manager,
         trade_manager,
+        shared_state,
+        shared_lock,
     ):
         super().__init__()
         self.worker_id = worker_id
@@ -415,7 +555,109 @@ class Worker(Process):
         )
         self.md_handler = None
         self.lock = Lock()
+        self.shared_state = shared_state
+        self.shared_lock = shared_lock
         logger.info(f"Worker {self.worker_id} initialized")
+
+    def print_shared_state_detailed(self):
+        """
+        Print detailed shared state information in a formatted way
+        """
+        try:
+            with self.shared_lock:
+                shared_state_copy = dict(self.shared_state)
+            
+            # Create the formatted output
+            separator = "=" * 80
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            header = f"[Worker {self.worker_id}] SHARED STATE SNAPSHOT - {timestamp}"
+            
+            # Start building the output
+            output_lines = [
+                "",
+                separator,
+                header,
+                separator
+            ]
+            
+            for key, value in shared_state_copy.items():
+                output_lines.append(f"\n📊 {key.upper()}:")
+                output_lines.append(f"   Type: {type(value).__name__}")
+                
+                if isinstance(value, dict):
+                    if len(value) == 0:
+                        output_lines.append("   Value: {} (empty)")
+                    else:
+                        output_lines.append(f"   Count: {len(value)} items")
+                        # Print first few items for dictionaries
+                        for i, (sub_key, sub_value) in enumerate(value.items()):
+                            if i < 5:  # Show first 5 items
+                                if isinstance(sub_value, dict):
+                                    output_lines.append(f"   - {sub_key}: {json.dumps(sub_value, indent=6, default=str)}")
+                                else:
+                                    output_lines.append(f"   - {sub_key}: {sub_value}")
+                            elif i == 5:
+                                output_lines.append(f"   ... and {len(value) - 5} more items")
+                                break
+                elif isinstance(value, (list, tuple)):
+                    output_lines.append(f"   Count: {len(value)} items")
+                    if len(value) > 0:
+                        output_lines.append(f"   Sample: {value[:3]}{'...' if len(value) > 3 else ''}")
+                else:
+                    output_lines.append(f"   Value: {value}")
+            
+            # Special handling for incomplete trades to show more details
+            incomplete_trade_keys = ["incomplete_entry_trades", "incomplete_exit_trades", "incomplete_takeprofit_trades"]
+            for incomplete_key in incomplete_trade_keys:
+                if incomplete_key in shared_state_copy and shared_state_copy[incomplete_key]:
+                    output_lines.append(f"\n🚨 {incomplete_key.upper()} DETAILS:")
+                    for symbol, trade_data in shared_state_copy[incomplete_key].items():
+                        output_lines.append(f"   Symbol: {symbol}")
+                        output_lines.append(f"   - Reason: {trade_data.get('reason', 'Unknown')}")
+                        output_lines.append(f"   - Attempts: {trade_data.get('attempt_count', 0)}")
+                        output_lines.append(f"   - Timestamp: {trade_data.get('timestamp', 'Unknown')}")
+                        output_lines.append(f"   - Order ID: {trade_data.get('order_id', 'None')}")
+                        signal_type = trade_data.get('signal', {}).get('type', 'Unknown')
+                        output_lines.append(f"   - Signal Type: {signal_type}")
+            
+            output_lines.extend([
+                "",
+                separator,
+                f"[Worker {self.worker_id}] END SHARED STATE SNAPSHOT",
+                separator,
+                ""
+            ])
+            
+            # Print to console
+            for line in output_lines:
+                print(line)
+            
+            # Also send to logger
+            full_output = "\n".join(output_lines)
+            logger.info(f"SHARED STATE DETAILED SNAPSHOT:\n{full_output}")
+            
+            # Additionally log a summary for easier parsing
+            summary_info = {
+                "worker_id": self.worker_id,
+                "timestamp": timestamp,
+                "shared_state_keys": list(shared_state_copy.keys()),
+                "summary": {}
+            }
+            
+            for key, value in shared_state_copy.items():
+                if isinstance(value, dict):
+                    summary_info["summary"][key] = {"type": "dict", "count": len(value)}
+                elif isinstance(value, (list, tuple)):
+                    summary_info["summary"][key] = {"type": type(value).__name__, "count": len(value)}
+                else:
+                    summary_info["summary"][key] = {"type": type(value).__name__, "value": str(value)}
+            
+            logger.info(f"SHARED STATE SUMMARY: {json.dumps(summary_info, indent=2, default=str)}")
+            
+        except Exception as e:
+            error_msg = f"Error printing shared state in worker {self.worker_id}: {str(e)}"
+            print(error_msg)
+            logger.error(error_msg, exc_info=True)
 
     def run(self):
         try:
@@ -428,6 +670,8 @@ class Worker(Process):
                 signal_processor=base_signal_processor,
                 aggregation_resolution=None,
                 risk_manager=self.risk_manager,
+                shared_state=self.shared_state,
+                shared_lock=self.shared_lock,
             )
             logger.info(f"MarketDataHandler initialized")
             # Pass the shared trade signal queue to the handler
@@ -436,8 +680,27 @@ class Worker(Process):
             # Start the MarketDataHandler's processing loop in a daemon thread
             Thread(target=self.md_handler.process_queue, daemon=True).start()
 
+            # Initialize monitoring variables
+            last_shared_state_print = time.time()
+            shared_state_print_interval = 30  # Print every 30 seconds
+            iteration_count = 0
+
             # Main loop: fetch data from the input queue and feed it to the handler
             while True:
+                iteration_count += 1
+                current_time = time.time()
+                
+                # Print shared state periodically
+                if current_time - last_shared_state_print >= shared_state_print_interval:
+                    self.print_shared_state_detailed()
+                    last_shared_state_print = current_time
+                
+                # Also print brief shared state info every 100 iterations for debugging
+                if iteration_count % 100 == 0:
+                    with self.shared_lock:
+                        shared_state_keys = list(self.shared_state.keys())
+                    logger.info(f"Worker {self.worker_id} - Iteration {iteration_count} - Shared State Keys: {shared_state_keys}")
+                
                 try:
                     data = self.in_queue.get(timeout=5)
                     if data.get("symbol") in self.symbols:

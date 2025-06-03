@@ -11,21 +11,21 @@ tables:
   active_trades: active_trades
 
 capital_management:
-  starting_capital: 200000
+  starting_capital: 10000
   max_allocation: 0.3
 
 trading_setting:
-  trading_date: '09-05-2025'
+  trading_date: '30-05-2025'
   confirmation_count: 3 # Number of Confirmation Candles to wait for before entering a trade
   max_trade_duration: 3800 # Number of seconds to hold a trade
   # None or Integer value in seconds
   cooling_period: None 
   # Simulation Related Keys
-  simulation:  True
-  simulation_type: 'historical'
-  simulation_date: '09-05-2025'
+  simulation:  False
+  simulation_type: 'historical' # historical or live
+  simulation_date: '30-05-2025'
   simulation_stocks: None
-  symbols: ['NATCOPHARM', 'ADANIGREEN', 'INFY', 'BAJFINANCE', 'TATACONSUM', 'JSWSTEEL', 'SHRIRAMFIN', 'AXISBANK', 'MARUTI', 'ADANIPORTS', 'COALINDIA', 'BPCL'] #, 'NESTLEIND', 'LT', 'RELIANCE', 'SBILIFE', 'DRREDDY', 'TATASTEEL', 'BAJAJFINSV', 'SBIN', 'HINDALCO', 'BHARTIARTL', 'EICHERMOT', 'TITAN', 'ADANIENT', 'TATAMOTORS', 'ICICIBANK', 'HDFCLIFE', 'GRASIM', 'TCS', 'ASIANPAINT', 'HEROMOTOCO', 'SUNPHARMA', 'ITC', 'BAJAJ-AUTO', 'HINDUNILVR', 'BRITANNIA', 'M&M', 'ULTRACEMCO', 'BEL', 'TRENT', 'INDUSINDBK']
+  symbols: ['NATCOPHARM', 'ADANIGREEN', 'INFY', 'TATACONSUM', 'JSWSTEEL', 'SHRIRAMFIN', 'AXISBANK', 'MARUTI', 'ADANIPORTS', 'COALINDIA', 'BPCL'] #, 'NESTLEIND', 'LT', 'RELIANCE', 'SBILIFE', 'DRREDDY', 'TATASTEEL', 'BAJAJFINSV', 'SBIN', 'HINDALCO', 'BHARTIARTL', 'EICHERMOT', 'TITAN', 'ADANIENT', 'TATAMOTORS', 'ICICIBANK', 'HDFCLIFE', 'GRASIM', 'TCS', 'ASIANPAINT', 'HEROMOTOCO', 'SUNPHARMA', 'ITC', 'BAJAJ-AUTO', 'HINDUNILVR', 'BRITANNIA', 'M&M', 'ULTRACEMCO', 'BEL', 'TRENT', 'INDUSINDBK']
   slippage: 0.01 # Slippage in percentage
   commission: 0.0001 # Commission in percentage
   aggregation_resolution: 1 # Aggregation Resolution for the Market Data
@@ -45,6 +45,7 @@ risk_management:
   max_allocation: 0.3 # Max Allocation of Capital for a Single Trade
   max_loss_cap_stock: null # Max Loss after which Trading is stoppped
   max_profit_cap_stock: null # Max Profit after with trading is stopped
-  max_loss_cap: 1000
+  max_loss_cap: -1000
   max_profit_cap: null
   force_exit_on_cap: False
+  max_symbol_price: 3000

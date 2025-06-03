@@ -6,6 +6,9 @@ import urllib.request, urllib.parse
 import pandas as pd
 import holidays
 from psycopg2.errors import UndefinedTable
+import multiprocessing
+import time
+from logger import logger
 
 import logging
 
@@ -251,3 +254,113 @@ def get_last_ending_capital(db_pool, date):
         return None
     finally:
         db_pool.putconn(conn)
+
+
+def validate_shared_state(shared_state, shared_lock, worker_id=None):
+    """
+    Validate that the shared state is accessible and properly synchronized across processes.
+    
+    Args:
+        shared_state: Manager.dict() object
+        shared_lock: Manager.Lock() object  
+        worker_id: Optional worker ID for logging
+    
+    Returns:
+        bool: True if shared state is valid and accessible
+    """
+    try:
+        with shared_lock:
+            # Test basic read access
+            test_keys = list(shared_state.keys())
+            
+            # Test basic write access
+            test_key = f"health_check_{worker_id or 'main'}_{int(time.time())}"
+            shared_state[test_key] = True
+            
+            # Test read-back
+            if shared_state.get(test_key) == True:
+                # Clean up test key
+                del shared_state[test_key]
+                logger.info(f"Shared state validation successful for {worker_id or 'main'}")
+                return True
+            else:
+                logger.error(f"Shared state read-back test failed for {worker_id or 'main'}")
+                return False
+                
+    except Exception as e:
+        logger.error(f"Shared state validation failed for {worker_id or 'main'}: {str(e)}")
+        return False
+
+def safe_update_shared_state(shared_state, shared_lock, key, value, worker_id=None):
+    """
+    Safely update shared state with proper error handling and logging.
+    
+    Args:
+        shared_state: Manager.dict() object
+        shared_lock: Manager.Lock() object
+        key: Key to update
+        value: Value to set
+        worker_id: Optional worker ID for logging
+    
+    Returns:
+        bool: True if update was successful
+    """
+    try:
+        with shared_lock:
+            shared_state[key] = value
+            logger.debug(f"Successfully updated shared_state[{key}] = {value} from {worker_id or 'main'}")
+            return True
+    except Exception as e:
+        logger.error(f"Failed to update shared_state[{key}] from {worker_id or 'main'}: {str(e)}")
+        return False
+
+def safe_get_shared_state(shared_state, shared_lock, key, default=None, worker_id=None):
+    """
+    Safely get value from shared state with proper error handling.
+    
+    Args:
+        shared_state: Manager.dict() object
+        shared_lock: Manager.Lock() object
+        key: Key to get
+        default: Default value if key doesn't exist
+        worker_id: Optional worker ID for logging
+    
+    Returns:
+        Value from shared state or default
+    """
+    try:
+        with shared_lock:
+            value = shared_state.get(key, default)
+            logger.debug(f"Successfully retrieved shared_state[{key}] = {value} from {worker_id or 'main'}")
+            return value
+    except Exception as e:
+        logger.error(f"Failed to get shared_state[{key}] from {worker_id or 'main'}: {str(e)}")
+        return default
+
+def monitor_manager_health(shared_state, shared_lock, interval=30):
+    """
+    Monitor the health of the multiprocessing Manager in a background thread.
+    
+    Args:
+        shared_state: Manager.dict() object
+        shared_lock: Manager.Lock() object
+        interval: Check interval in seconds
+    """
+    def health_monitor():
+        while True:
+            try:
+                # Validate shared state periodically
+                if not validate_shared_state(shared_state, shared_lock, "monitor"):
+                    logger.error("Manager health check failed!")
+                else:
+                    logger.debug("Manager health check passed")
+                
+                time.sleep(interval)
+            except Exception as e:
+                logger.error(f"Manager health monitor error: {str(e)}")
+                time.sleep(interval)
+    
+    import threading
+    monitor_thread = threading.Thread(target=health_monitor, daemon=True)
+    monitor_thread.start()
+    return monitor_thread

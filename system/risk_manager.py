@@ -41,6 +41,7 @@ class RiskManager:
         max_allocation: float,
         max_active_trades: int,
         config: dict,
+        margin_dict: dict,
     ):
         """
         Initialize the Global Risk Manager.
@@ -67,7 +68,7 @@ class RiskManager:
         self.start_capital = total_capital
         self.active_trades = OrderedDict()  # Maps trade_id -> trade info.
         self.lock = multiprocessing.Lock()
-        self.margin_dict = {}  # Local mapping: symbol -> margin multiplier.
+        self.margin_dict = margin_dict  # Local mapping: symbol -> margin multiplier.
         self.most_recent_exit_trade_id = 0
         self.global_returns = 0.0
         self.halt_trading = False
@@ -81,7 +82,7 @@ class RiskManager:
         logger.info(
             f"{self.__class__.__name__} initialized with total_capital={self.total_capital}, "
             f"risk_per_trade={self.risk_per_trade}, max_allocation={self.max_allocation}, "
-            f"max_active_trades={self.max_active_trades}"
+            f"max_active_trades={self.max_active_trades}, margin_dict={self.margin_dict}"
         )
 
     def initialize_db(self):
@@ -203,6 +204,7 @@ class RiskManager:
         """
         with self.lock:
             margin_val = self.margin_dict.get(symbol, 1)
+            logger.debug(f"{self.__class__.__name__}: Margin value for {symbol} is {margin_val}")
             units, units_risk, units_afford, max_units_cap = (
                 self.calculate_position_size_detailed(
                     entry_price, stop_loss, margin_val, symbol
@@ -242,7 +244,19 @@ class RiskManager:
                         "allocated": allocated,
                         "reason": reason,
                     }
-
+            if self.config["risk_management"]["max_symbol_price"] is not None:
+                if entry_price > self.config["risk_management"]["max_symbol_price"]:
+                    reason = f"Entry Price is too high for {symbol}. Entry Price - {entry_price}, Max Symbol Price - {self.config['risk_management']['max_symbol_price']}"
+                    logger.info(
+                        f"{self.__class__.__name__}: Trade for {symbol} not eligible: {reason}"
+                    )
+                    return {
+                        "eligible": False,
+                        "units": 0,
+                        "allocated": allocated,
+                        "reason": reason,
+                    }
+            
             # Check eligibility criteria.
             if units <= 0 or allocated > self.available_capital:
                 detail = ""
@@ -259,7 +273,7 @@ class RiskManager:
                     "reason": reason,
                 }
 
-            half_units_cost = entry_price * (units / 2)
+            half_units_cost = (entry_price * (units / 2)) / margin_val
             if self.available_capital < half_units_cost:
                 reason = f"Not enough capital for at least half the position: Needed ₹{half_units_cost:.2f}"
                 logger.info(
@@ -272,7 +286,7 @@ class RiskManager:
                     "reason": reason,
                 }
 
-            if allocated * margin_val < 0.05 * self.total_capital:
+            if allocated  < 0.05 * self.total_capital:
                 reason = f"Trade too small: Allocated ₹{allocated:.2f} is less than 5% of total capital"
                 logger.info(
                     f"{self.__class__.__name__}: Trade for {symbol} not eligible: {reason}"

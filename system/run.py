@@ -20,17 +20,25 @@ if __name__ == "__main__":
     )
     config = load_config(CONFIG_PATH)
 
+
+    if config["trading_setting"]["simulation"].lower() in ['historical', 'live']:
+        os.environ["SIMULATION_TYPE"] = config["trading_setting"]["simulation_type"].lower()
+    else:
+        raise ValueError("Simulation type must be either historical or live")
+
     os.environ["LIVE_DATA"] = str(not config["trading_setting"]["simulation"]).lower()
     trading_date = (
         config["trading_setting"]["trading_date"]
         if os.environ["LIVE_DATA"]
         else config["trading_setting"]["simulation_date"]
     )
+
+    # Set the simulation type to live or historical
+    os.environ["SIMULATION_TYPE"] = config["trading_setting"]["simulation_type"].lower()
     # delete_database_tables(['market_data', 'stock_signals', 'trade_log', 'active_trades', 'capital_log'])
     # initialize_database()
     delete_day_data(trading_date)
     driver = Driver(config)
-    driver.run()
 
     try:
         driver.run()

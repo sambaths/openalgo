@@ -420,6 +420,11 @@ def setup(echo=False):
     engine = create_engine(
         f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db}",
         echo=echo,  # Set to False in production
+        pool_size=200,
+        max_overflow=100,
+        pool_timeout=10,
+        pool_recycle=1800,
+        pool_pre_ping=True
     )
     # # Create a configured "Session" class and a session instance.
     Session = sessionmaker(bind=engine)
@@ -490,6 +495,7 @@ class DBHandler:
             logger.error("Error inserting records:", e)
         finally:
             # Remove the session from thread-local storage.
+            session.close()
             self.Session.remove()
 
     def delete_records(self, *, model=None, criteria=None, records=None):
@@ -557,6 +563,7 @@ class DBHandler:
             print("Error deleting records:", e)
         finally:
             # Clean up the thread-local session.
+            session.close()
             self.Session.remove()
 
     def update_records(self, model, record_id, update_data, id_column=None):
@@ -604,6 +611,7 @@ class DBHandler:
             logger.error(f"Error updating records: {e}")
         finally:
             # Clean up the thread-local session.
+            session.close()
             self.Session.remove()
 
     def query_records(self, model, criteria=None, limit=None):
@@ -641,6 +649,7 @@ class DBHandler:
             return []
         finally:
             # Clean up the thread-local session.
+            session.close()
             self.Session.remove()
 
     def get_max_trade_id(self, model):
@@ -661,6 +670,7 @@ class DBHandler:
             logger.error(f"Error getting max trade_id: {e}")
             return 0
         finally:
+            session.close()
             self.Session.remove()
 
     def execute_sql_query(self, query, params=None, fetch=True):

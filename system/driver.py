@@ -8,6 +8,7 @@ from trade_manager import TradeManager
 from worker import Worker
 from broker_simulator import SimulatedWebSocket
 from fyers_utils import FyersBroker
+from utils import validate_shared_state, monitor_manager_health, safe_update_shared_state, safe_get_shared_state
 
 from dotenv import load_dotenv
 
@@ -24,8 +25,9 @@ import time
 
 
 class OrderStatusManager:
-    def __init__(self, shared_state, poll_interval=1):
+    def __init__(self, shared_state, shared_lock, poll_interval=1):
         self.shared_state = shared_state
+        self.shared_lock = shared_lock
         self.poll_interval = poll_interval
         self.running = True
         self.api_url = os.getenv(
@@ -37,7 +39,9 @@ class OrderStatusManager:
         while self.running:
             try:
                 # Get all order IDs to check (should be updated by workers/trade manager)
-                order_ids = list(self.shared_state.get("active_order_ids", []))
+                with self.shared_lock:
+                    order_ids = list(self.shared_state.get("active_order_ids", []))
+                
                 status_dict = {}
                 for order_id in order_ids:
                     payload = {"apikey": self.api_key, "orderid": order_id}
@@ -55,7 +59,9 @@ class OrderStatusManager:
                             }
                     except Exception as e:
                         status_dict[order_id] = {"status": "error", "message": str(e)}
-                self.shared_state["order_status_dict"] = status_dict
+                
+                with self.shared_lock:
+                    self.shared_state["order_status_dict"] = status_dict
             except Exception as e:
                 logger.error(f"OrderStatusManager polling error: {e}")
             time.sleep(self.poll_interval)
@@ -110,7 +116,7 @@ class Driver:
     def __init__(self, config):
         self.config = config
         self.symbols = self.config["trading_setting"]["symbols"]
-        self.num_workers = 8
+        self.num_workers = 4
         self.lock = Lock()
         self.workers = []
         self.worker_queues = {}
@@ -125,13 +131,23 @@ class Driver:
             self.worker_symbols[worker_idx].append(symbol)
             self.worker_assignment[symbol] = worker_idx
 
-        # Set up shared state
-        manager = Manager()
-        self.shared_state = manager.dict()
+        # Set up shared state with proper Manager
+        self.manager = Manager()
+        self.shared_state = self.manager.dict()
+        self.shared_lock = self.manager.Lock()  # Shared lock for synchronization
+        
+        # Initialize shared state variables
         self.shared_state["active_trades"] = 0
-        self.trade_signal_queue = manager.Queue()
-        self.shared_state["active_order_ids"] = []  # List of all order IDs to track
-        self.shared_state["order_status_dict"] = {}  # Dict of order_id -> status
+        self.shared_state["active_order_ids"] = self.manager.list()  # Use manager.list()
+        self.shared_state["order_status_dict"] = self.manager.dict()  # Use manager.dict()
+        self.shared_state["failed_trades"] = self.manager.dict()  # Track failed trades across processes
+        
+        # Initialize incomplete trade tracking dictionaries
+        self.shared_state["incomplete_entry_trades"] = self.manager.dict()
+        self.shared_state["incomplete_exit_trades"] = self.manager.dict()
+        self.shared_state["incomplete_takeprofit_trades"] = self.manager.dict()
+        
+        self.trade_signal_queue = self.manager.Queue()
 
         # Retrieve margin information
         payload = {"apikey": os.getenv("APP_KEY"), "symbols": self.symbols}
@@ -140,9 +156,87 @@ class Driver:
             f"{os.getenv('HOST_SERVER')}/api/v1/intradaymargin/", json=payload
         )
         self.shared_state["margin_dict"] = response.json()["data"]
+        logger.debug(f"{self.__class__.__name__}: Margin dictionary: {response.json()["data"]}")
+        # Get funds from OpenAlgo API and validate
+        logger.info("Getting funds information from OpenAlgo API...")
+        try:
+            funds_payload = {"apikey": os.getenv("APP_KEY")}
+            funds_response = requests.post(
+                f"{os.getenv('HOST_SERVER')}/api/v1/funds/", 
+                json=funds_payload, 
+                headers=headers,
+                timeout=10
+            )
+            
+            if funds_response.status_code == 200:
+                funds_data = funds_response.json()
+                api_funds = float(funds_data.get("data", {}).get("availablecash", 0))
+                logger.info(f"Available funds from API: ₹{api_funds:,.2f}")
+            else:
+                logger.error(f"Failed to get funds from API: {funds_response.status_code}")
+                api_funds = 0
+        except Exception as e:
+            logger.error(f"Error getting funds from API: {e}")
+            api_funds = 0
 
-        logger.info(f"Using Starting Capital from Config file")
-        starting_capital = config["capital_management"]["starting_capital"]
+        # Determine if we're using live data
+        LIVE_DATA = os.environ.get(
+            "LIVE_DATA", str(self.config.get("LIVE_DATA", False))
+        ).lower() in ["true", "1"]
+
+        # Get starting capital from config
+        config_capital = config["capital_management"]["starting_capital"]
+        logger.info(f"Starting capital from config: ₹{config_capital:,.2f}")
+
+        # Apply funds validation logic
+        if LIVE_DATA:
+            logger.info("Live trading mode detected")
+            if api_funds == 0:
+                logger.critical("❌ CRITICAL: Live trading mode but available funds is 0!")
+                logger.critical("❌ Cannot proceed with live trading without funds")
+                logger.critical("❌ Terminating system immediately for safety")
+                raise SystemExit("Live trading terminated: Zero funds available")
+            
+            # Use minimum of API funds or config
+            final_capital = min(api_funds, config_capital)
+            logger.info(f"Live mode: Using minimum of API funds (₹{api_funds:,.2f}) and config (₹{config_capital:,.2f})")
+            logger.info(f"Final capital for live trading: ₹{final_capital:,.2f}")
+            
+        else:
+            logger.info("Simulated trading mode detected")
+            if api_funds == 0:
+                # In simulation, if API funds is 0, use config value
+                final_capital = config_capital
+                logger.info(f"Simulation mode: API funds is 0, using config capital: ₹{final_capital:,.2f}")
+            else:
+                # Use minimum of API funds or config
+                final_capital = min(api_funds, config_capital)
+                logger.info(f"Simulation mode: Using minimum of API funds (₹{api_funds:,.2f}) and config (₹{config_capital:,.2f})")
+                logger.info(f"Final capital for simulation: ₹{final_capital:,.2f}")
+
+        # Validate minimum capital requirement
+        MIN_CAPITAL_REQUIRED = 10000
+        if final_capital < MIN_CAPITAL_REQUIRED:
+            logger.critical("❌ CRITICAL: Insufficient capital for trading!")
+            logger.critical(f"❌ Final capital: ₹{final_capital:,.2f}")
+            logger.critical(f"❌ Minimum required: ₹{MIN_CAPITAL_REQUIRED:,.2f}")
+            logger.critical("❌ System cannot operate safely with such low capital")
+            logger.critical("❌ Shutting down immediately to prevent losses")
+            
+            if LIVE_DATA:
+                logger.critical("❌ Please add more funds to your trading account")
+            else:
+                logger.critical("❌ Please increase starting_capital in config file")
+            
+            raise SystemExit(f"Insufficient capital: ₹{final_capital:,.2f} < ₹{MIN_CAPITAL_REQUIRED:,.2f}")
+
+        # Store LIVE_DATA as instance variable for use in other methods
+        self.LIVE_DATA = LIVE_DATA
+
+        # Store final capital
+        starting_capital = final_capital
+        logger.info(f"✅ Capital validation successful: ₹{starting_capital:,.2f}")
+        logger.info(f"Using Starting Capital: ₹{starting_capital:,.2f} ({'Live' if LIVE_DATA else 'Simulated'} mode)")
 
         # Initialize risk manager
         self.risk_manager = RiskManager(
@@ -152,6 +246,7 @@ class Driver:
             max_allocation=config["risk_management"]["max_allocation"],
             max_active_trades=config["risk_management"].get("max_active_trades", 5),
             config=self.config,
+            margin_dict=response.json()["data"],
         )
 
         # Initialize trade manager
@@ -160,8 +255,10 @@ class Driver:
             trade_executor=None,
             max_active_trades=config["risk_management"].get("max_active_trades", 5),
             shared_state=self.shared_state,
+            shared_lock=self.shared_lock,
             config=self.config,
             margin_dict=self.shared_state["margin_dict"],
+            manager=self.manager,
         )
 
         # Create worker queues and workers
@@ -176,6 +273,8 @@ class Driver:
                 margin_dict=self.shared_state["margin_dict"],
                 capital_manager=self.risk_manager,
                 trade_manager=None,  # self.trade_manager,
+                shared_state=self.shared_state,
+                shared_lock=self.shared_lock,
             )
             self.workers.append(worker)
 
@@ -184,7 +283,14 @@ class Driver:
         for i, q in self.worker_queues.items():
             self.dispatcher.register_worker_queue(i, q)
 
-        self.order_status_manager = OrderStatusManager(self.shared_state)
+        self.order_status_manager = OrderStatusManager(self.shared_state, self.shared_lock)
+        
+        # Validate shared state and start health monitoring
+        if validate_shared_state(self.shared_state, self.shared_lock, "driver"):
+            logger.info("Shared state validation passed for Driver")
+            self.health_monitor_thread = monitor_manager_health(self.shared_state, self.shared_lock)
+        else:
+            logger.error("Shared state validation failed for Driver - this may cause issues!")
 
     def start_workers(self):
         """Start all worker processes"""
@@ -196,11 +302,7 @@ class Driver:
         """
         Sets up the live or simulated data feed and dispatches market data.
         """
-        LIVE_DATA = os.environ.get(
-            "LIVE_DATA", str(self.config.get("LIVE_DATA", False))
-        ).lower() in ["true", "1"]
-        if LIVE_DATA:
-
+        if self.LIVE_DATA or os.environ["SIMULATION_TYPE"] == "live":
             def on_message(data):
                 self.dispatcher.dispatch(data)
 
@@ -210,7 +312,6 @@ class Driver:
             websocket._on_ws_message = on_message
             websocket.connect_websocket()
         else:
-
             def on_message(ws, data):
                 self.dispatcher.dispatch(json.loads(data))
 
