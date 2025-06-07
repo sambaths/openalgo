@@ -362,7 +362,7 @@ class BrokerData:
         for symbol in symbols:
             try:
                 # Get quote for symbol
-                
+                time.sleep(1)
                 quote = self.get_quotes(symbol, "NSE")
                 ltp = quote.get('ltp', 0)
                 if not ltp:
