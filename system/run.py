@@ -4,7 +4,7 @@ if __name__ == "__main__":
 
     # Custom imports
     from utils import load_config
-    from db_cleanup import delete_day_data
+    from system.misc.db_cleanup import delete_day_data
     from logger import logger
 
     os.environ["DEBUG_LEVEL"] = "DEBUG"
@@ -21,7 +21,7 @@ if __name__ == "__main__":
     config = load_config(CONFIG_PATH)
 
 
-    if config["trading_setting"]["simulation"].lower() in ['historical', 'live']:
+    if config["trading_setting"]["simulation_type"].lower() in ['historical', 'live']:
         os.environ["SIMULATION_TYPE"] = config["trading_setting"]["simulation_type"].lower()
     else:
         raise ValueError("Simulation type must be either historical or live")
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     # Set the simulation type to live or historical
     os.environ["SIMULATION_TYPE"] = config["trading_setting"]["simulation_type"].lower()
     # delete_database_tables(['market_data', 'stock_signals', 'trade_log', 'active_trades', 'capital_log'])
-    # initialize_database()
+    initialize_database()
     delete_day_data(trading_date)
     driver = Driver(config)
 

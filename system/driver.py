@@ -22,6 +22,14 @@ logger.setLevel(getattr(logging, os.environ["DEBUG_LEVEL"].upper(), None))
 
 import threading
 import time
+import queue
+
+from db import setup, DBHandler, MarketData, StockSignals
+from strategy_manager import StrategyManager, create_strategy_manager
+
+# Import termination handler
+from websocket_termination_handler import create_termination_handler
+from enhanced_broker_simulator import EnhancedSimulatedWebSocket
 
 
 class OrderStatusManager:
@@ -91,11 +99,11 @@ class DataDispatcher:
         self.symbols = symbols
         self.worker_assignment = worker_assignment
         self.worker_queues = {}  # Map: worker index -> multiprocessing.Queue
-        logger.info(f"DataDispatcher initialized")
+        logger.debug(f"DataDispatcher initialized")
 
     def register_worker_queue(self, worker_idx, queue):
         self.worker_queues[worker_idx] = queue
-        logger.info(f"Worker queue registered for worker {worker_idx}")
+        logger.debug(f"Worker queue registered for worker {worker_idx}")
 
     def dispatch(self, data):
         """
@@ -116,7 +124,7 @@ class Driver:
     def __init__(self, config):
         self.config = config
         self.symbols = self.config["trading_setting"]["symbols"]
-        self.num_workers = 4
+        self.num_workers = min(len(self.symbols), 6)
         self.lock = Lock()
         self.workers = []
         self.worker_queues = {}
@@ -155,10 +163,11 @@ class Driver:
         response = requests.post(
             f"{os.getenv('HOST_SERVER')}/api/v1/intradaymargin/", json=payload
         )
+        logger.debug(f"{self.__class__.__name__}: Margin response: {response.json()}")
         self.shared_state["margin_dict"] = response.json()["data"]
         logger.debug(f"{self.__class__.__name__}: Margin dictionary: {response.json()["data"]}")
         # Get funds from OpenAlgo API and validate
-        logger.info("Getting funds information from OpenAlgo API...")
+        logger.debug("Getting funds information from OpenAlgo API...")
         try:
             funds_payload = {"apikey": os.getenv("APP_KEY")}
             funds_response = requests.post(
@@ -186,7 +195,7 @@ class Driver:
 
         # Get starting capital from config
         config_capital = config["capital_management"]["starting_capital"]
-        logger.info(f"Starting capital from config: ₹{config_capital:,.2f}")
+        logger.debug(f"Starting capital from config: ₹{config_capital:,.2f}")
 
         # Apply funds validation logic
         if LIVE_DATA:
@@ -199,7 +208,7 @@ class Driver:
             
             # Use minimum of API funds or config
             final_capital = min(api_funds, config_capital)
-            logger.info(f"Live mode: Using minimum of API funds (₹{api_funds:,.2f}) and config (₹{config_capital:,.2f})")
+            logger.debug(f"Live mode: Using minimum of API funds (₹{api_funds:,.2f}) and config (₹{config_capital:,.2f})")
             logger.info(f"Final capital for live trading: ₹{final_capital:,.2f}")
             
         else:
@@ -211,7 +220,7 @@ class Driver:
             else:
                 # Use minimum of API funds or config
                 final_capital = min(api_funds, config_capital)
-                logger.info(f"Simulation mode: Using minimum of API funds (₹{api_funds:,.2f}) and config (₹{config_capital:,.2f})")
+                logger.debug(f"Simulation mode: Using minimum of API funds (₹{api_funds:,.2f}) and config (₹{config_capital:,.2f})")
                 logger.info(f"Final capital for simulation: ₹{final_capital:,.2f}")
 
         # Validate minimum capital requirement
@@ -235,7 +244,7 @@ class Driver:
 
         # Store final capital
         starting_capital = final_capital
-        logger.info(f"✅ Capital validation successful: ₹{starting_capital:,.2f}")
+        logger.debug(f"✅ Capital validation successful: ₹{starting_capital:,.2f}")
         logger.info(f"Using Starting Capital: ₹{starting_capital:,.2f} ({'Live' if LIVE_DATA else 'Simulated'} mode)")
 
         # Initialize risk manager
@@ -287,7 +296,7 @@ class Driver:
         
         # Validate shared state and start health monitoring
         if validate_shared_state(self.shared_state, self.shared_lock, "driver"):
-            logger.info("Shared state validation passed for Driver")
+            logger.debug("Shared state validation passed for Driver")
             self.health_monitor_thread = monitor_manager_health(self.shared_state, self.shared_lock)
         else:
             logger.error("Shared state validation failed for Driver - this may cause issues!")
@@ -296,11 +305,11 @@ class Driver:
         """Start all worker processes"""
         for worker in self.workers:
             worker.start()
-        print("workers started")
 
     def run_data_feed(self):
         """
         Sets up the live or simulated data feed and dispatches market data.
+        Enhanced with termination handling.
         """
         if self.LIVE_DATA or os.environ["SIMULATION_TYPE"] == "live":
             def on_message(data):
@@ -325,12 +334,27 @@ class Driver:
         Central loop that processes trade signals coming from workers.
         Also starts the order status polling manager.
         """
-        print("Processing trade signals")
+        logger.debug("Processing trade signals")
         self.order_status_manager.start()
+        
+        # Initialize time tracking for periodic status printing
+        last_time_print = time.time()
+        time_print_interval = 30  # Print every 30 seconds
+        
         try:
             while True:
                 try:
-                    signal = self.trade_signal_queue.get(timeout=1)
+                    signal = self.trade_signal_queue.get()
+                    
+                    # Print current signal time every 30 seconds
+                    current_time = time.time()
+                    if current_time - last_time_print >= time_print_interval:
+                        signal_time_str = signal.get('time', 'Unknown')
+                        if hasattr(signal.get('time'), 'strftime'):
+                            signal_time_str = signal['time'].strftime('%Y-%m-%d %H:%M:%S')
+                        logger.info(f"📅 Current Signal Time: {signal_time_str} | System Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                        last_time_print = current_time
+                    
                     with self.lock:
                         logger.debug(f"Processing trade signal: {signal}")
                         self.trade_manager.process_signal(signal)

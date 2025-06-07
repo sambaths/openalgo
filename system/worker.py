@@ -10,10 +10,7 @@ import time
 import json
 
 from db import setup, DBHandler, MarketData, StockSignals
-from strategy.trendscore import EnhancedTrendScoreStrategy
-
-
-CurrentStrategy = EnhancedTrendScoreStrategy
+from strategy_manager import StrategyManager, create_strategy_manager
 
 
 ###############################################################################
@@ -37,12 +34,13 @@ class MarketDataHandler:
       capital_manager (CapitalManager): Reference to the capital manager for trade sizing and entries.
       aggregation_resolution (int): Time window in minutes for aggregating market data.
       aggregated_data (dict): Temporary storage for aggregated market data.
+      strategy_manager (StrategyManager): Manages multiple strategies for different symbols.
     """
 
     def __init__(
-        self, signal_processor=None, aggregation_resolution=None, risk_manager=None, shared_state=None, shared_lock=None
+        self, signal_processor=None, aggregation_resolution=None, risk_manager=None, shared_state=None, shared_lock=None, config=None
     ):
-        logger.info("Initializing MarketDataHandler.")
+        logger.debug("Initializing MarketDataHandler.")
         # Create process-local database connection
         self.engine, self.session = setup()
         self.db_handler = DBHandler(self.engine)
@@ -53,11 +51,87 @@ class MarketDataHandler:
             int(aggregation_resolution) if aggregation_resolution is not None else None
         )
         self.aggregated_data = {}
-        self.signal_processors = {}  # Will create processors per symbol
+        self.signal_processors = {}  # Will create processors per symbol using strategy manager
         self.risk_manager = risk_manager
         self.shared_state = shared_state
         self.shared_lock = shared_lock
-        logger.info("MarketDataHandler initialized.")
+        
+        # Initialize strategy manager if config is provided
+        if config:
+            try:
+                self.strategy_manager = create_strategy_manager(config)
+                logger.info("StrategyManager initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize StrategyManager: {e}")
+                logger.warning("Falling back to legacy single-strategy mode")
+                self.strategy_manager = None
+        else:
+            logger.warning("No config provided, running in legacy mode")
+            self.strategy_manager = None
+            
+        logger.debug("MarketDataHandler initialized.")
+
+    def get_or_create_signal_processor(self, symbol):
+        """
+        Get or create a signal processor (strategy instance) for a given symbol.
+        
+        Args:
+            symbol: The symbol to get/create strategy for
+            
+        Returns:
+            Strategy instance for the symbol
+        """
+        if symbol in self.signal_processors:
+            return self.signal_processors[symbol]
+        
+        try:
+            if self.strategy_manager:
+                # Use strategy manager to create appropriate strategy for symbol
+                processor = self.strategy_manager.create_strategy_instance(
+                    symbol=symbol,
+                    historical_data=None,
+                    market_date=None,
+                    resolution=None,
+                    lookback_period=100,
+                    use_history=False
+                )
+                logger.info(f"Created strategy instance for {symbol}: {processor.__class__.__name__}")
+            else:
+                # Fallback to legacy mode - import and use the default strategy
+                from strategy.trendscore import EnhancedTrendScoreStrategy
+                processor = EnhancedTrendScoreStrategy(
+                    historical_data=None,
+                    market_date=None,
+                    symbol=symbol,
+                    resolution=None,
+                    lookback_period=100,
+                    use_history=False
+                )
+                logger.warning(f"Using legacy default strategy for {symbol}: {processor.__class__.__name__}")
+            
+            # Cache the processor
+            self.signal_processors[symbol] = processor
+            return processor
+            
+        except Exception as e:
+            logger.error(f"Failed to create signal processor for {symbol}: {e}")
+            # Last resort fallback
+            try:
+                from strategy.trendscore import EnhancedTrendScoreStrategy
+                processor = EnhancedTrendScoreStrategy(
+                    historical_data=None,
+                    market_date=None,
+                    symbol=symbol,
+                    resolution=None,
+                    lookback_period=100,
+                    use_history=False
+                )
+                logger.warning(f"Emergency fallback to default strategy for {symbol}")
+                self.signal_processors[symbol] = processor
+                return processor
+            except Exception as fallback_error:
+                logger.critical(f"Complete failure to create strategy for {symbol}: {fallback_error}")
+                raise
 
     def check_incomplete_trades(self, symbol):
         """
@@ -134,7 +208,7 @@ class MarketDataHandler:
             for key in merge_keys:
                 if key in previous_signal and key not in merged_signal:
                     merged_signal[key] = previous_signal[key]
-                    logger.info(f"Merged key '{key}' from incomplete {signal_type} trade for {symbol}")
+                    logger.debug(f"Merged key '{key}' from incomplete {signal_type} trade for {symbol}")
             
             # Update attempt count
             attempt_count = incomplete_trade.get("attempt_count", 1) + 1
@@ -149,7 +223,7 @@ class MarketDataHandler:
         Continuously processes the data queue.
         """
         
-        logger.info("MarketDataHandler process_queue started.")
+        logger.debug("MarketDataHandler process_queue started.")
         while self.running:
             batch = []
             try:
@@ -185,7 +259,7 @@ class MarketDataHandler:
         """
         Aggregates incoming market data over the specified resolution.
         """
-        logger.info(f"Aggregating data: {batch}")
+        logger.debug(f"Aggregating data: {batch}")
         self.db_handler.insert_records(
             records=[MarketData(**records) for records in batch]
         )
@@ -386,7 +460,7 @@ class MarketDataHandler:
                 "upper_ckt"
             ],  # Upper circuit price
         }
-        logger.info(f"Emitting Aggregated data for {symbol}: {aggregated_record}")
+        logger.debug(f"Emitting Aggregated data for {symbol}: {aggregated_record}")
         # Reset the aggregated data for the symbol
         del self.aggregated_data[symbol]
         return aggregated_record
@@ -411,9 +485,8 @@ class MarketDataHandler:
 
                 if symbol not in self.signal_processors:
                     # Create a new processor instance
-                    processor = CurrentStrategy  # Create a fresh instance
-                    self.signal_processors[symbol] = processor(symbol=symbol)
-                    logger.info(f"Created new signal processor for symbol {symbol}")
+                    processor = self.get_or_create_signal_processor(symbol)
+                    logger.debug(f"Created new signal processor for symbol {symbol}")
 
                 # Process the bar with this processor
                 try:
@@ -435,7 +508,7 @@ class MarketDataHandler:
                     # Check for incomplete entry trades and discard signal BEFORE running
                     incomplete_info = self.check_incomplete_trades(symbol)
                     if incomplete_info.get("entry"):
-                        logger.info(f"Discarding signal for {symbol} BEFORE run() - incomplete entry trade exists: {incomplete_info['entry']}")
+                        logger.debug(f"Discarding signal for {symbol} BEFORE run() - incomplete entry trade exists: {incomplete_info['entry']}")
                         try:
                             self.signal_processors[symbol]._discard_signal()
                             self.signal_processors[symbol]._reset_position_tracking()
@@ -452,13 +525,18 @@ class MarketDataHandler:
                         processed_signal = self.apply_signal_management(symbol, results)
                         
                         if processed_signal:
-                            self.trade_signal_queue.put(processed_signal)
+                            if processed_signal["type"]:
+                                logger.debug(f"Putting signal for {symbol} to trade_signal_queue: {processed_signal}")
+                                self.trade_signal_queue.put(processed_signal)
+                            else:
+                                logger.debug(f"Signal for {symbol} was not forwarded to trade_signal_queue because it is not a valid signal (entry, exit, take_profit)")
                             result_copy = processed_signal.copy()
                             if "trade_id" in result_copy:
                                 result_copy.pop("trade_id")
                             self.db_handler.insert_records(StockSignals(**result_copy))
+
                         else:
-                            logger.info(f"Signal for {symbol} was discarded due to incomplete trade management")
+                            logger.debug(f"Signal for {symbol} was discarded due to incomplete trade management")
                 except Exception as e:
                     logger.error(
                         f"Error processing bar for {symbol}: {str(e)}", exc_info=True
@@ -504,7 +582,7 @@ class MarketDataHandler:
             self.engine.dispose()
         if hasattr(self, "session"):
             self.session.close()
-        logger.info("MarketDataHandler stopped.")
+        logger.debug("MarketDataHandler stopped.")
 
     def _safe_timestamp_conversion(self, timestamp):
         """Helper method to safely convert various timestamp formats to datetime objects"""
@@ -557,7 +635,7 @@ class Worker(Process):
         self.lock = Lock()
         self.shared_state = shared_state
         self.shared_lock = shared_lock
-        logger.info(f"Worker {self.worker_id} initialized")
+        logger.debug(f"Worker {self.worker_id} initialized")
 
     def print_shared_state_detailed(self):
         """
@@ -634,7 +712,7 @@ class Worker(Process):
             
             # Also send to logger
             full_output = "\n".join(output_lines)
-            logger.info(f"SHARED STATE DETAILED SNAPSHOT:\n{full_output}")
+            logger.debug(f"SHARED STATE DETAILED SNAPSHOT:\n{full_output}")
             
             # Additionally log a summary for easier parsing
             summary_info = {
@@ -652,19 +730,54 @@ class Worker(Process):
                 else:
                     summary_info["summary"][key] = {"type": type(value).__name__, "value": str(value)}
             
-            logger.info(f"SHARED STATE SUMMARY: {json.dumps(summary_info, indent=2, default=str)}")
+            logger.debug(f"SHARED STATE SUMMARY: {json.dumps(summary_info, indent=2, default=str)}")
             
         except Exception as e:
             error_msg = f"Error printing shared state in worker {self.worker_id}: {str(e)}"
             print(error_msg)
             logger.error(error_msg, exc_info=True)
 
+    def get_or_create_signal_processor(self, symbol):
+        """
+        Get or create a signal processor (strategy instance) for a given symbol.
+        This is a simplified version for Worker class - actual strategy creation is handled by MarketDataHandler.
+        
+        Args:
+            symbol: The symbol to get/create strategy for
+            
+        Returns:
+            Strategy instance for the symbol
+        """
+        try:
+            # For the worker class, we just need to create a simple default strategy instance
+            # The actual multi-strategy logic is handled in MarketDataHandler
+            from strategy.trendscore import EnhancedTrendScoreStrategy
+            processor = EnhancedTrendScoreStrategy(
+                historical_data=None,
+                market_date=None,
+                symbol=symbol,
+                resolution=None,
+                lookback_period=100,
+                use_history=False
+            )
+            logger.debug(f"Worker {self.worker_id}: Created default strategy instance for {symbol}")
+            return processor
+            
+        except Exception as e:
+            logger.error(f"Worker {self.worker_id}: Failed to create signal processor for {symbol}: {e}")
+            raise
+
     def run(self):
         try:
             print(f"[Worker {self.worker_id}] Starting. Symbols: {self.symbols}")
 
-            # Create a base signal processor using configuration
-            base_signal_processor = CurrentStrategy
+            # Create a base signal processor using configuration - just use the first symbol
+            if self.symbols:
+                base_signal_processor = self.get_or_create_signal_processor(self.symbols[0])
+            else:
+                # Fallback if no symbols assigned
+                base_signal_processor = None
+                
             # Instantiate MarketDataHandler to process incoming bars
             self.md_handler = MarketDataHandler(
                 signal_processor=base_signal_processor,
@@ -672,8 +785,9 @@ class Worker(Process):
                 risk_manager=self.risk_manager,
                 shared_state=self.shared_state,
                 shared_lock=self.shared_lock,
+                config=self.config
             )
-            logger.info(f"MarketDataHandler initialized")
+            logger.debug(f"MarketDataHandler initialized")
             # Pass the shared trade signal queue to the handler
             self.md_handler.trade_signal_queue = self.trade_signal_queue
 
@@ -692,14 +806,16 @@ class Worker(Process):
                 
                 # Print shared state periodically
                 if current_time - last_shared_state_print >= shared_state_print_interval:
-                    self.print_shared_state_detailed()
+                    if os.environ["DEBUG_LEVEL"] == "DEBUG":
+                        # self.print_shared_state_detailed()
+                        pass
                     last_shared_state_print = current_time
                 
                 # Also print brief shared state info every 100 iterations for debugging
                 if iteration_count % 100 == 0:
                     with self.shared_lock:
                         shared_state_keys = list(self.shared_state.keys())
-                    logger.info(f"Worker {self.worker_id} - Iteration {iteration_count} - Shared State Keys: {shared_state_keys}")
+                    logger.debug(f"Worker {self.worker_id} - Iteration {iteration_count} - Shared State Keys: {shared_state_keys}")
                 
                 try:
                     data = self.in_queue.get(timeout=5)

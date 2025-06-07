@@ -79,7 +79,7 @@ class RiskManager:
         self.price_tracker = {}
         self.force_exit_triggered_symbols = {}
 
-        logger.info(
+        logger.debug(
             f"{self.__class__.__name__} initialized with total_capital={self.total_capital}, "
             f"risk_per_trade={self.risk_per_trade}, max_allocation={self.max_allocation}, "
             f"max_active_trades={self.max_active_trades}, margin_dict={self.margin_dict}"
@@ -378,17 +378,19 @@ class RiskManager:
                 return
 
             # Check if this trade_id already exists in TradeLog to prevent duplicates
+            # Use both trade_id and trade_date since trade_id resets daily
             existing_trade_log = db_handler.query_records(
                 TradeLog,
                 criteria=(
-                    TradeLog.trade_id == self.max_trade_id + trade_record["trade_id"]
+                    (TradeLog.trade_id == trade_record["trade_id"]) & 
+                    (TradeLog.trade_date == trade_record["entry_time"].date())
                 ),
             )
 
             if existing_trade_log:
-                error_msg = f"Trade {trade_record['trade_id']} already exists in TradeLog. Cannot register exit twice."
+                error_msg = f"Trade {trade_record['trade_id']} for date {trade_record['entry_time'].date()} already exists in TradeLog. Cannot register exit twice."
                 logger.error(f"{self.__class__.__name__}: {error_msg} - {trade_record}")
-                raise ValueError(error_msg)
+                return  # Return instead of raising exception to avoid crashing
 
             trade = self.active_trades.pop(trade_record["trade_id"])
             realised_pnl = (trade_record["exit_price"] - trade["entry_price"]) * (
@@ -410,11 +412,13 @@ class RiskManager:
             if trade_record["symbol"] in self.active_trade_symbols:
                 self.active_trade_symbols.discard(trade_record["symbol"])
 
-            db_handler.delete_records(
-                model=ActiveTrades,
-                criteria=(ActiveTrades.trade_id == trade_record["trade_id"]),
-            )
+            # Delete from ActiveTrades and insert into TradeLog atomically
             try:
+                db_handler.delete_records(
+                    model=ActiveTrades,
+                    criteria=(ActiveTrades.trade_id == trade_record["trade_id"]),
+                )
+                
                 db_handler.insert_records(
                     TradeLog(
                         trade_id=trade_record["trade_id"],
@@ -437,6 +441,8 @@ class RiskManager:
                         instrument=trade_record["symbol"],
                     )
                 )
+
+                logger.debug(f"Successfully inserted trade {trade_record['trade_id']} into TradeLog")
 
                 # Update or create CapitalLog entry for the current date
                 trade_date = trade_record["exit_time"].date()
@@ -472,7 +478,12 @@ class RiskManager:
                     logger.info(f"Created new capital log for {trade_date}")
 
             except Exception as e:
-                logger.error(f"Failed to update trade records: {str(e)}")
+                logger.error(f"Failed to update trade records for trade {trade_record['trade_id']}: {str(e)}")
+                # Re-add the trade back to active_trades if database operation failed
+                self.active_trades[trade_record["trade_id"]] = trade
+                self.global_returns -= realised_pnl
+                self.active_trade_symbols.add(trade_record["symbol"])
+                raise
 
     def register_partial_trade_exit(self, trade_record: dict):
         """

@@ -3,6 +3,7 @@ from multiprocessing import Lock
 from logger import logger
 from datetime import datetime
 from pytz import timezone
+import uuid
 
 IST = timezone("Asia/Kolkata")
 from openalgo import api
@@ -45,21 +46,155 @@ class TradeManager:
         self.trade_tracker = {}
         self.manager = manager  # Store manager reference for creating managed objects
         self.shared_state = shared_state
-        self.openalgo_client = api(
-            api_key=os.getenv("APP_KEY"),
-            host=os.getenv("HOST_SERVER", "http://127.0.0.1:5000"),
-        )
+        
+        # Check if simulation mode is enabled
+        self.is_simulation_mode = os.getenv("simulation_type", "").lower() in ["live", "historical"]
+        self.is_live_simulate_mode = self.is_simulation_mode == "live"
+        if self.is_simulation_mode:
+            logger.info("🎭 SIMULATION MODE ENABLED - All trades will be simulated, no real orders will be placed")
+        if self.is_live_simulate_mode:
+            self.openalgo_client = None  # Don't initialize API client in simulation mode
+        else:
+            self.openalgo_client = api(
+                api_key=os.getenv("APP_KEY"),
+                host=os.getenv("HOST_SERVER", "http://127.0.0.1:5000"),
+            )
 
-        logger.info("TradeManager Initialized")
+        logger.debug("TradeManager Initialized")
+
+    def _generate_dummy_order_response(self, action, symbol, quantity):
+        """
+        Generate a dummy successful order response for simulation mode
+        
+        Args:
+            action: BUY or SELL
+            symbol: Trading symbol
+            quantity: Order quantity
+            
+        Returns:
+            Dict: Dummy successful order response
+        """
+        dummy_order_id = f"SIM_{uuid.uuid4().hex[:8].upper()}"
+        return {
+            "status": "success",
+            "orderid": dummy_order_id,
+            "message": f"Simulated {action} order placed successfully",
+            "data": {
+                "order_id": dummy_order_id,
+                "symbol": symbol,
+                "action": action,
+                "quantity": quantity,
+                "status": "COMPLETE",
+                "exchange": "NSE",
+                "product": "MIS",
+                "price_type": "MARKET"
+            }
+        }
+
+    def _generate_dummy_order_status_response(self, order_id):
+        """
+        Generate a dummy order status response for simulation mode
+        
+        Args:
+            order_id: The order ID to check
+            
+        Returns:
+            Dict: Dummy order status response showing completion
+        """
+        return {
+            "status": "success",
+            "data": {
+                "order_id": order_id,
+                "order_status": "COMPLETE",
+                "filled_quantity": "100",
+                "average_price": "100.50",
+                "message": "Simulated order completed successfully"
+            }
+        }
+
+    def _place_order_with_simulation_check(self, strategy, symbol, action, exchange, price_type, product, quantity):
+        """
+        Place order with simulation mode check
+        
+        Args:
+            All the standard placeorder parameters
+            
+        Returns:
+            Dict: Order response (real or simulated)
+        """
+        if self.is_live_simulate_mode:
+            logger.debug(f"🎭 SIMULATION: Placing {action} order for {quantity} shares of {symbol}")
+            return self._generate_dummy_order_response(action, symbol, quantity)
+        else:
+            return self.openalgo_client.placeorder(
+                strategy=strategy,
+                symbol=symbol,
+                action=action,
+                exchange=exchange,
+                price_type=price_type,
+                product=product,
+                quantity=quantity,
+            )
+
+    def _get_order_status_with_simulation_check(self, order_id, strategy):
+        """
+        Get order status with simulation mode check
+        
+        Args:
+            order_id: Order ID to check
+            strategy: Strategy name
+            
+        Returns:
+            Dict: Order status response (real or simulated)
+        """
+        if self.is_live_simulate_mode:
+            logger.debug(f"🎭 SIMULATION: Checking status for order {order_id} - returning completed status")
+            return self._generate_dummy_order_status_response(order_id)
+        else:
+            return self.openalgo_client.orderstatus(
+                order_id=order_id,
+                strategy=strategy
+            )
+
+    def _check_order_completion(self, response):
+        """
+        Check if order is completed, handling both real and simulation modes
+        
+        Args:
+            response: Order response from placeorder
+            
+        Returns:
+            Tuple: (order_completed: bool, order_id: str)
+        """
+        if self.is_live_simulate_mode:
+            # In simulation mode, all orders are immediately completed
+            return True, response.get("orderid")
+        
+        # Real mode - check order status
+        order_completed = False
+        order_id = response.get("orderid")
+        
+        if order_id:
+            try:
+                order_status_response = self._get_order_status_with_simulation_check(order_id, "Python")
+                logger.debug(f"Order Status for Order ID {order_id}: {order_status_response}")
+                
+                # Check if order is actually completed
+                if order_status_response.get("data", {}).get("order_status", "").lower() in ["complete", "executed", "filled"]:
+                    order_completed = True
+                    logger.debug(f"Order {order_id} is completed/executed")
+                else:
+                    logger.warning(f"Order {order_id} is not completed yet. Status: {order_status_response.get('data', {}).get('order_status', 'Unknown')}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to get order status for Order ID {order_id}: {e}")
+        
+        return order_completed, order_id
 
     def process_signal(self, signal):
         """Process a trade signal"""
         lock = self.lock
         logger.debug(f"TradeTracker: {self.trade_tracker}")
-        
-        # Update failed trades count in shared state using proper synchronization
-        with self.shared_lock:
-            self.shared_state['failed_trades'][signal.get('symbol', 'unknown')] = len(self.trade_tracker)
         
         try:
             # Track Prices for Getting Returns
@@ -68,7 +203,7 @@ class TradeManager:
             returns_stock = self.risk_manager.get_current_returns_for_symbol(
                 symbol=signal["symbol"], current_price=signal["price"]
             )
-            logger.info(
+            logger.debug(
                 f"Current Prices - {self.risk_manager.price_tracker}, Current Global Returns - {returns}, {signal['symbol']} Returns -  {returns_stock}"
             )
 
@@ -192,8 +327,8 @@ class TradeManager:
                                 "order_id": [],
                             }
 
-                            # Trade execution using openalgo
-                            response = self.openalgo_client.placeorder(
+                            # Trade execution using openalgo (or simulation)
+                            response = self._place_order_with_simulation_check(
                                 strategy="Python",
                                 symbol=get_oa_symbol(signal["symbol"], "NSE"),
                                 action="BUY",
@@ -203,28 +338,10 @@ class TradeManager:
                                 quantity=position_size,
                             )
 
-                            logger.info(f"Response for Entry Trade: {response}")
+                            logger.debug(f"Response for Entry Trade: {response}")
                             
-                            # Get order status to determine if trade was successful
-                            order_completed = False
-                            if response.get("orderid"):
-                                order_id = response["orderid"]
-                                try:
-                                    order_status_response = self.openalgo_client.orderstatus(
-                                        order_id=order_id,
-                                        strategy="Python"
-                                    )
-                                    logger.info(f"Order Status for Entry Trade (Order ID: {order_id}): {order_status_response}")
-                                    
-                                    # Check if order is actually completed
-                                    if order_status_response.get("data", {}).get("order_status", "").lower() in ["complete", "executed", "filled"]:
-                                        order_completed = True
-                                        logger.info(f"Order {order_id} is completed/executed")
-                                    else:
-                                        logger.warning(f"Order {order_id} is not completed yet. Status: {order_status_response.get('data', {}).get('order_status', 'Unknown')}")
-                                        
-                                except Exception as e:
-                                    logger.error(f"Failed to get order status for Order ID {order_id}: {e}")
+                            # Check order completion (handles both real and simulation modes)
+                            order_completed, order_id = self._check_order_completion(response)
                             
                             # Only proceed if order is actually completed
                             if order_completed:
@@ -234,10 +351,13 @@ class TradeManager:
                                     trade_record
                                 )
                                 self.trade_tracker[signal["symbol"]] = self.trade_id
-                                trade_record["order_id"].append(response["orderid"])
+                                trade_record["order_id"].append(order_id)
                                 
                                 # Clear any incomplete entry trade for this symbol
                                 self.clear_incomplete_trade(signal["symbol"], "entry")
+                                
+                                # Clear any previous failed trade record for successful trade
+                                self.clear_failed_trade(signal["symbol"])
                             else:
                                 logger.info(f"{self.__class__.__name__}: Trade entry for {signal['symbol']} failed - order not completed")
                                 
@@ -245,12 +365,19 @@ class TradeManager:
                                 self.track_incomplete_trade(
                                     signal=signal,
                                     trade_type="entry", 
-                                    order_id=response.get("orderid"),
+                                    order_id=order_id,
                                     reason="entry_order_not_completed"
                                 )
                                 
-                                with self.shared_lock:
-                                    self.shared_state['failed_trades'][signal['symbol']] = response
+                                # Track failed trade with proper structure
+                                self.track_failed_trade(
+                                    signal=signal,
+                                    trade_type="entry",
+                                    order_id=order_id,
+                                    response=response,
+                                    reason="entry_order_not_completed"
+                                )
+                                
                                 if signal["symbol"] in self.trade_tracker:
                                     del self.trade_tracker[signal["symbol"]]
                     # If a take profit is there - Calculate the current profit and save the trade as a take profit trade
@@ -269,8 +396,8 @@ class TradeManager:
                             signal["price"] - trade_record["entry_price"]
                         ) * trade_record["position_closed_tp"]
 
-                        # Trade execution using openalgo
-                        response = self.openalgo_client.placeorder(
+                        # Trade execution using openalgo (or simulation)
+                        response = self._place_order_with_simulation_check(
                             strategy="Python",
                             symbol=get_oa_symbol(signal["symbol"], "NSE"),
                             action="SELL",
@@ -279,28 +406,10 @@ class TradeManager:
                             product="MIS",
                             quantity=trade_record["position_closed_tp"],
                         )
-                        logger.info(f"Response for Take Profit Trade: {response}")
+                        logger.debug(f"Response for Take Profit Trade: {response}")
                         
-                        # Get order status to determine if trade was successful
-                        order_completed = False
-                        if response.get("orderid"):
-                            order_id = response["orderid"]
-                            try:
-                                order_status_response = self.openalgo_client.orderstatus(
-                                    order_id=order_id,
-                                    strategy="Python"
-                                )
-                                logger.info(f"Order Status for Take Profit Trade (Order ID: {order_id}): {order_status_response}")
-                                
-                                # Check if order is actually completed
-                                if order_status_response.get("data", {}).get("order_status", "").lower() in ["complete", "executed", "filled"]:
-                                    order_completed = True
-                                    logger.info(f"Order {order_id} is completed/executed")
-                                else:
-                                    logger.warning(f"Order {order_id} is not completed yet. Status: {order_status_response.get('data', {}).get('order_status', 'Unknown')}")
-                                    
-                            except Exception as e:
-                                logger.error(f"Failed to get order status for Order ID {order_id}: {e}")
+                        # Check order completion (handles both real and simulation modes)
+                        order_completed, order_id = self._check_order_completion(response)
                         
                         # Only proceed if order is actually completed
                         if order_completed:
@@ -311,7 +420,7 @@ class TradeManager:
                             trade_record["realized_pnl_tp"] = (
                                 signal["price"] - trade_record["entry_price"]
                             ) * trade_record["position_closed_tp"]
-                            trade_record["order_id"].append(response["orderid"])
+                            trade_record["order_id"].append(order_id)
                             self.trade_id = (
                                 self.risk_manager.register_partial_trade_exit(
                                     trade_record
@@ -320,6 +429,9 @@ class TradeManager:
                             
                             # Clear any incomplete take_profit trade for this symbol
                             self.clear_incomplete_trade(signal["symbol"], "take_profit")
+                            
+                            # Clear any previous failed trade record for successful trade
+                            self.clear_failed_trade(signal["symbol"])
                         else:
                             logger.info(f"{self.__class__.__name__}: Partial Trade Exit for {signal['symbol']} failed - order not completed")
                             
@@ -327,20 +439,34 @@ class TradeManager:
                             self.track_incomplete_trade(
                                 signal=signal,
                                 trade_type="take_profit",
-                                order_id=response.get("orderid"),
+                                order_id=order_id,
                                 reason="take_profit_order_not_completed"
                             )
                             
-                            with self.shared_lock:
-                                self.shared_state['failed_trades'][signal['symbol']] = response
+                            # Track failed trade with proper structure
+                            self.track_failed_trade(
+                                signal=signal,
+                                trade_type="take_profit",
+                                order_id=order_id,
+                                response=response,
+                                reason="take_profit_order_not_completed"
+                            )
                     elif (
                         signal["type"] == "exit"
                         and signal["symbol"] in self.trade_tracker
                     ):
                         # Get Trade Record from the Active Trades
-                        trade_record = self.risk_manager.active_trades[
-                            self.trade_tracker[signal["symbol"]]
-                        ]
+                        trade_id = self.trade_tracker[signal["symbol"]]
+                        
+                        # Double-check that this trade still exists in active trades
+                        # to prevent duplicate processing by multiple processes
+                        if trade_id not in self.risk_manager.active_trades:
+                            logger.warning(f"Trade {trade_id} for {signal['symbol']} already processed or doesn't exist in active trades. Skipping exit.")
+                            if signal["symbol"] in self.trade_tracker:
+                                del self.trade_tracker[signal["symbol"]]
+                            return
+                            
+                        trade_record = self.risk_manager.active_trades[trade_id]
 
                         trade_record["realized_pnl_estimated"] = (
                             (signal["price"] - trade_record["entry_price"])
@@ -349,8 +475,8 @@ class TradeManager:
                         )
                         trade_record["exit_price_estimated"] = signal["price"]
                         trade_record["exit_time_estimated"] = signal["time"]
-                        # Trade execution using openalgo
-                        response = self.openalgo_client.placeorder(
+                        # Trade execution using openalgo (or simulation)
+                        response = self._place_order_with_simulation_check(
                             strategy="Python",
                             symbol=get_oa_symbol(signal["symbol"], "NSE"),
                             action="SELL",
@@ -360,31 +486,21 @@ class TradeManager:
                             quantity=trade_record["position_size"]
                             - trade_record["position_closed_tp"],
                         )
-                        logger.info(f"Response for Exit Trade: {response}")
                         
-                        # Get order status to determine if trade was successful
-                        order_completed = False
-                        if response.get("orderid"):
-                            order_id = response["orderid"]
-                            try:
-                                order_status_response = self.openalgo_client.orderstatus(
-                                    order_id=order_id,
-                                    strategy="Python"
-                                )
-                                logger.info(f"Order Status for Exit Trade (Order ID: {order_id}): {order_status_response}")
-                                
-                                # Check if order is actually completed
-                                if order_status_response.get("data", {}).get("order_status", "").lower() in ["complete", "executed", "filled"]:
-                                    order_completed = True
-                                    logger.info(f"Order {order_id} is completed/executed")
-                                else:
-                                    logger.warning(f"Order {order_id} is not completed yet. Status: {order_status_response.get('data', {}).get('order_status', 'Unknown')}")
-                                    
-                            except Exception as e:
-                                logger.error(f"Failed to get order status for Order ID {order_id}: {e}")
+                        logger.debug(f"Response for Exit Trade: {response}")
+                        
+                        # Check order completion (handles both real and simulation modes)
+                        order_completed, order_id = self._check_order_completion(response)
                         
                         # Only proceed if order is actually completed
                         if order_completed:
+                            # Final check before registering exit to prevent race conditions
+                            if trade_id not in self.risk_manager.active_trades:
+                                logger.warning(f"Trade {trade_id} for {signal['symbol']} was already processed by another process. Skipping duplicate exit.")
+                                if signal["symbol"] in self.trade_tracker:
+                                    del self.trade_tracker[signal["symbol"]]
+                                return
+                                
                             trade_record["status"] = "completed"
                             trade_record["realized_pnl"] = (
                                 signal["price"] - trade_record["entry_price"]
@@ -394,12 +510,25 @@ class TradeManager:
                             )
                             trade_record["exit_price"] = signal["price"]
                             trade_record["exit_time"] = signal["time"]
-                            trade_record["order_id"].append(response["orderid"])
-                            self.risk_manager.register_full_trade_exit(trade_record)
-                            del self.trade_tracker[signal["symbol"]]
+                            trade_record["order_id"].append(order_id)
+                            
+                            # Use try-except to handle potential duplicate registration
+                            try:
+                                self.risk_manager.register_full_trade_exit(trade_record)
+                                logger.info(f"Successfully registered trade exit for {signal['symbol']} (trade_id: {trade_id})")
+                            except Exception as e:
+                                logger.error(f"Failed to register trade exit for {signal['symbol']} (trade_id: {trade_id}): {e}")
+                                # Continue processing even if registration fails
+                            
+                            # Only remove from trade_tracker if exit was successful
+                            if signal["symbol"] in self.trade_tracker:
+                                del self.trade_tracker[signal["symbol"]]
                             
                             # Clear any incomplete exit trade for this symbol
                             self.clear_incomplete_trade(signal["symbol"], "exit")
+                            
+                            # Clear any previous failed trade record for successful trade
+                            self.clear_failed_trade(signal["symbol"])
                         else:
                             logger.info(f"{self.__class__.__name__}: Full Trade Exit for {signal['symbol']} failed - order not completed")
                             
@@ -407,12 +536,19 @@ class TradeManager:
                             self.track_incomplete_trade(
                                 signal=signal,
                                 trade_type="exit",
-                                order_id=response.get("orderid"),
+                                order_id=order_id,
                                 reason="exit_order_not_completed"
                             )
                             
-                            with self.shared_lock:
-                                self.shared_state['failed_trades'][signal['symbol']] = response
+                            # Track failed trade with proper structure
+                            self.track_failed_trade(
+                                signal=signal,
+                                trade_type="exit",
+                                order_id=order_id,
+                                response=response,
+                                reason="exit_order_not_completed"
+                            )
+                            
                             del self.trade_tracker[signal["symbol"]]
                 # Short Position
                 if signal["current_position"] == "short":
@@ -477,8 +613,8 @@ class TradeManager:
                                 "order_id": [],
                             }
 
-                            # Trade execution using openalgo
-                            response = self.openalgo_client.placeorder(
+                            # Trade execution using openalgo (or simulation)
+                            response = self._place_order_with_simulation_check(
                                 strategy="Python",
                                 symbol=get_oa_symbol(signal["symbol"], "NSE"),
                                 action="SELL",
@@ -487,28 +623,10 @@ class TradeManager:
                                 product="MIS",
                                 quantity=position_size,
                             )
-                            logger.info(f"Response for Entry Trade (Short): {response}")
+                            logger.debug(f"Response for Entry Trade (Short): {response}")
                             
-                            # Get order status to determine if trade was successful
-                            order_completed = False
-                            if response.get("orderid"):
-                                order_id = response["orderid"]
-                                try:
-                                    order_status_response = self.openalgo_client.orderstatus(
-                                        order_id=order_id,
-                                        strategy="Python"
-                                    )
-                                    logger.info(f"Order Status for Entry Trade (Order ID: {order_id}): {order_status_response}")
-                                    
-                                    # Check if order is actually completed
-                                    if order_status_response.get("data", {}).get("order_status", "").lower() in ["complete", "executed", "filled"]:
-                                        order_completed = True
-                                        logger.info(f"Order {order_id} is completed/executed")
-                                    else:
-                                        logger.warning(f"Order {order_id} is not completed yet. Status: {order_status_response.get('data', {}).get('order_status', 'Unknown')}")
-                                        
-                                except Exception as e:
-                                    logger.error(f"Failed to get order status for Order ID {order_id}: {e}")
+                            # Check order completion (handles both real and simulation modes)
+                            order_completed, order_id = self._check_order_completion(response)
                             
                             # Only proceed if order is actually completed
                             if order_completed:
@@ -518,10 +636,13 @@ class TradeManager:
                                     trade_record
                                 )
                                 self.trade_tracker[signal["symbol"]] = self.trade_id
-                                trade_record["order_id"].append(response["orderid"])
+                                trade_record["order_id"].append(order_id)
                                 
                                 # Clear any incomplete entry trade for this symbol
                                 self.clear_incomplete_trade(signal["symbol"], "entry")
+                                
+                                # Clear any previous failed trade record for successful trade
+                                self.clear_failed_trade(signal["symbol"])
                             else:
                                 logger.info(f"{self.__class__.__name__}: Trade entry for {signal['symbol']} failed - order not completed")
                                 
@@ -529,12 +650,19 @@ class TradeManager:
                                 self.track_incomplete_trade(
                                     signal=signal,
                                     trade_type="entry", 
-                                    order_id=response.get("orderid"),
+                                    order_id=order_id,
                                     reason="entry_order_not_completed"
                                 )
                                 
-                                with self.shared_lock:
-                                    self.shared_state['failed_trades'][signal['symbol']] = response
+                                # Track failed trade with proper structure
+                                self.track_failed_trade(
+                                    signal=signal,
+                                    trade_type="entry",
+                                    order_id=order_id,
+                                    response=response,
+                                    reason="entry_order_not_completed"
+                                )
+                                
                                 if signal["symbol"] in self.trade_tracker:
                                     del self.trade_tracker[signal["symbol"]]
                     elif signal["type"] == "take_profit":
@@ -552,8 +680,8 @@ class TradeManager:
                             trade_record["entry_price"] - signal["price"]
                         ) * trade_record["position_closed_tp"]
 
-                        # Trade execution using openalgo
-                        response = self.openalgo_client.placeorder(
+                        # Trade execution using openalgo (or simulation)
+                        response = self._place_order_with_simulation_check(
                             strategy="Python",
                             symbol=get_oa_symbol(signal["symbol"], "NSE"),
                             action="BUY",
@@ -562,28 +690,10 @@ class TradeManager:
                             product="MIS",
                             quantity=trade_record["position_closed_tp"],
                         )
-                        logger.info(f"Response for Take Profit Trade: {response}")
+                        logger.debug(f"Response for Take Profit Trade: {response}")
                         
-                        # Get order status to determine if trade was successful
-                        order_completed = False
-                        if response.get("orderid"):
-                            order_id = response["orderid"]
-                            try:
-                                order_status_response = self.openalgo_client.orderstatus(
-                                    order_id=order_id,
-                                    strategy="Python"
-                                )
-                                logger.info(f"Order Status for Take Profit Trade (Order ID: {order_id}): {order_status_response}")
-                                
-                                # Check if order is actually completed
-                                if order_status_response.get("data", {}).get("order_status", "").lower() in ["complete", "executed", "filled"]:
-                                    order_completed = True
-                                    logger.info(f"Order {order_id} is completed/executed")
-                                else:
-                                    logger.warning(f"Order {order_id} is not completed yet. Status: {order_status_response.get('data', {}).get('order_status', 'Unknown')}")
-                                    
-                            except Exception as e:
-                                logger.error(f"Failed to get order status for Order ID {order_id}: {e}")
+                        # Check order completion (handles both real and simulation modes)
+                        order_completed, order_id = self._check_order_completion(response)
                         
                         # Only proceed if order is actually completed
                         if order_completed:
@@ -594,7 +704,7 @@ class TradeManager:
                             trade_record["realized_pnl_tp"] = (
                                 trade_record["entry_price"] - signal["price"]
                             ) * trade_record["position_closed_tp"]
-                            trade_record["order_id"].append(response["orderid"])
+                            trade_record["order_id"].append(order_id)
                             self.trade_id = (
                                 self.risk_manager.register_partial_trade_exit(
                                     trade_record
@@ -603,6 +713,9 @@ class TradeManager:
                             
                             # Clear any incomplete take_profit trade for this symbol
                             self.clear_incomplete_trade(signal["symbol"], "take_profit")
+                            
+                            # Clear any previous failed trade record for successful trade
+                            self.clear_failed_trade(signal["symbol"])
                         else:
                             logger.info(f"{self.__class__.__name__}: Partial Trade Exit for {signal['symbol']} failed - order not completed")
                             
@@ -610,21 +723,35 @@ class TradeManager:
                             self.track_incomplete_trade(
                                 signal=signal,
                                 trade_type="take_profit",
-                                order_id=response.get("orderid"),
+                                order_id=order_id,
                                 reason="take_profit_order_not_completed"
                             )
                             
-                            with self.shared_lock:
-                                self.shared_state['failed_trades'][signal['symbol']] = response
+                            # Track failed trade with proper structure
+                            self.track_failed_trade(
+                                signal=signal,
+                                trade_type="take_profit",
+                                order_id=order_id,
+                                response=response,
+                                reason="take_profit_order_not_completed"
+                            )
                     elif (
                         signal["type"] == "exit"
                         and signal["symbol"] in self.trade_tracker
                     ):
                         # Get Trade Record from the Active Trades
-                        trade_record = self.risk_manager.active_trades[
-                            self.trade_tracker[signal["symbol"]]
-                        ]
-                        # Execute Exit Trade
+                        trade_id = self.trade_tracker[signal["symbol"]]
+                        
+                        # Double-check that this trade still exists in active trades
+                        # to prevent duplicate processing by multiple processes
+                        if trade_id not in self.risk_manager.active_trades:
+                            logger.warning(f"Trade {trade_id} for {signal['symbol']} already processed or doesn't exist in active trades. Skipping exit.")
+                            if signal["symbol"] in self.trade_tracker:
+                                del self.trade_tracker[signal["symbol"]]
+                            return
+                            
+                        trade_record = self.risk_manager.active_trades[trade_id]
+
                         trade_record["realized_pnl_estimated"] = (
                             (trade_record["entry_price"] - signal["price"])
                             * trade_record["position_size"]
@@ -633,8 +760,8 @@ class TradeManager:
                         trade_record["exit_price_estimated"] = signal["price"]
                         trade_record["exit_time_estimated"] = signal["time"]
 
-                        # Trade execution using openalgo
-                        response = self.openalgo_client.placeorder(
+                        # Trade execution using openalgo (or simulation)
+                        response = self._place_order_with_simulation_check(
                             strategy="Python",
                             symbol=get_oa_symbol(signal["symbol"], "NSE"),
                             action="BUY",
@@ -644,31 +771,20 @@ class TradeManager:
                             quantity=trade_record["position_size"]
                             - trade_record["position_closed_tp"],
                         )
-                        logger.info(f"Response for Exit Trade: {response}")
+                        logger.debug(f"Response for Exit Trade: {response}")
                         
-                        # Get order status to determine if trade was successful
-                        order_completed = False
-                        if response.get("orderid"):
-                            order_id = response["orderid"]
-                            try:
-                                order_status_response = self.openalgo_client.orderstatus(
-                                    order_id=order_id,
-                                    strategy="Python"
-                                )
-                                logger.info(f"Order Status for Exit Trade (Order ID: {order_id}): {order_status_response}")
-                                
-                                # Check if order is actually completed
-                                if order_status_response.get("data", {}).get("order_status", "").lower() in ["complete", "executed", "filled"]:
-                                    order_completed = True
-                                    logger.info(f"Order {order_id} is completed/executed")
-                                else:
-                                    logger.warning(f"Order {order_id} is not completed yet. Status: {order_status_response.get('data', {}).get('order_status', 'Unknown')}")
-                                    
-                            except Exception as e:
-                                logger.error(f"Failed to get order status for Order ID {order_id}: {e}")
+                        # Check order completion (handles both real and simulation modes)
+                        order_completed, order_id = self._check_order_completion(response)
                         
                         # Only proceed if order is actually completed
                         if order_completed:
+                            # Final check before registering exit to prevent race conditions
+                            if trade_id not in self.risk_manager.active_trades:
+                                logger.warning(f"Trade {trade_id} for {signal['symbol']} was already processed by another process. Skipping duplicate exit.")
+                                if signal["symbol"] in self.trade_tracker:
+                                    del self.trade_tracker[signal["symbol"]]
+                                return
+                                
                             trade_record["status"] = "completed"
                             trade_record["realized_pnl"] = (
                                 trade_record["entry_price"] - signal["price"]
@@ -678,12 +794,25 @@ class TradeManager:
                             )
                             trade_record["exit_price"] = signal["price"]
                             trade_record["exit_time"] = signal["time"]
-                            trade_record["order_id"].append(response["orderid"])
-                            self.risk_manager.register_full_trade_exit(trade_record)
-                            del self.trade_tracker[signal["symbol"]]
+                            trade_record["order_id"].append(order_id)
+                            
+                            # Use try-except to handle potential duplicate registration
+                            try:
+                                self.risk_manager.register_full_trade_exit(trade_record)
+                                logger.info(f"Successfully registered trade exit for {signal['symbol']} (trade_id: {trade_id})")
+                            except Exception as e:
+                                logger.error(f"Failed to register trade exit for {signal['symbol']} (trade_id: {trade_id}): {e}")
+                                # Continue processing even if registration fails
+                            
+                            # Only remove from trade_tracker if exit was successful
+                            if signal["symbol"] in self.trade_tracker:
+                                del self.trade_tracker[signal["symbol"]]
                             
                             # Clear any incomplete exit trade for this symbol
                             self.clear_incomplete_trade(signal["symbol"], "exit")
+                            
+                            # Clear any previous failed trade record for successful trade
+                            self.clear_failed_trade(signal["symbol"])
                         else:
                             logger.info(f"{self.__class__.__name__}: Full Trade Exit for {signal['symbol']} failed - order not completed")
                             
@@ -691,20 +820,89 @@ class TradeManager:
                             self.track_incomplete_trade(
                                 signal=signal,
                                 trade_type="exit",
-                                order_id=response.get("orderid"),
+                                order_id=order_id,
                                 reason="exit_order_not_completed"
                             )
                             
-                            with self.shared_lock:
-                                self.shared_state['failed_trades'][signal['symbol']] = response
+                            # Track failed trade with proper structure
+                            self.track_failed_trade(
+                                signal=signal,
+                                trade_type="exit",
+                                order_id=order_id,
+                                response=response,
+                                reason="exit_order_not_completed"
+                            )
+                            
                             del self.trade_tracker[signal["symbol"]]
-                logger.info(f"Processed Signal {signal}")
+                logger.debug(f"Processed Signal {signal}")
             else:
-                logger.info(f"No Valid Signal {signal}")
+                logger.debug(f"No Valid Signal {signal}")
         except Exception as e:
             logger.error(
                 f"Error Processing {signal} with Exception {str(e)}", exc_info=True
             )
+
+    def track_failed_trade(self, signal, trade_type, order_id=None, response=None, reason="order_failed"):
+        """
+        Track failed trades in shared_state with proper structure and comprehensive information
+        
+        Args:
+            signal: The original signal that failed
+            trade_type: 'entry', 'exit', or 'take_profit'
+            order_id: The order ID if available
+            response: The API response from the failed order
+            reason: Reason for failure
+        """
+        symbol = signal["symbol"]
+        failed_trade_data = {
+            "signal": {
+                "symbol": signal["symbol"],
+                "type": signal["type"],
+                "current_position": signal["current_position"],
+                "price": signal["price"],
+                "time": signal["time"].isoformat() if hasattr(signal["time"], 'isoformat') else str(signal["time"]),
+            },
+            "trade_type": trade_type,
+            "order_id": order_id,
+            "response": response,
+            "timestamp": datetime.now(tz=IST).isoformat(),
+            "reason": reason,
+            "attempt_count": 1,
+            "active_trades_count": len(self.trade_tracker)  # Current count when failure occurred
+        }
+        
+        with self.shared_lock:
+            # Initialize failed trades dictionary if it doesn't exist
+            if "failed_trades" not in self.shared_state:
+                self.shared_state["failed_trades"] = self.manager.dict() if hasattr(self, 'manager') else {}
+            
+            # Get current failed trades and update
+            failed_trades = dict(self.shared_state["failed_trades"])
+            
+            # If this symbol already has a failed trade, increment attempt count
+            if symbol in failed_trades:
+                if isinstance(failed_trades[symbol], dict) and "attempt_count" in failed_trades[symbol]:
+                    failed_trade_data["attempt_count"] = failed_trades[symbol]["attempt_count"] + 1
+            
+            failed_trades[symbol] = failed_trade_data
+            self.shared_state["failed_trades"] = failed_trades
+            
+        logger.error(f"Tracked failed {trade_type} trade for {symbol}: {failed_trade_data}")
+
+    def clear_failed_trade(self, symbol):
+        """
+        Clear failed trade record when a trade succeeds
+        
+        Args:
+            symbol: The symbol to clear
+        """
+        with self.shared_lock:
+            if "failed_trades" in self.shared_state:
+                failed_trades = dict(self.shared_state["failed_trades"])
+                if symbol in failed_trades:
+                    del failed_trades[symbol]
+                    self.shared_state["failed_trades"] = failed_trades
+                    logger.info(f"Cleared failed trade record for {symbol} - trade succeeded")
 
     def safe_get_shared_state(self, key, default=None):
         """

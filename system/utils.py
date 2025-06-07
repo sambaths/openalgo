@@ -281,7 +281,7 @@ def validate_shared_state(shared_state, shared_lock, worker_id=None):
             if shared_state.get(test_key) == True:
                 # Clean up test key
                 del shared_state[test_key]
-                logger.info(f"Shared state validation successful for {worker_id or 'main'}")
+                logger.debug(f"Shared state validation successful for {worker_id or 'main'}")
                 return True
             else:
                 logger.error(f"Shared state read-back test failed for {worker_id or 'main'}")
