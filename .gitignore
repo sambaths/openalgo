@@ -57,3 +57,8 @@ system/backtest_results/*
 system/misc/*
 system/docs/*
 system/tests/*
+system/notebooks/*
+system/backtesting.py/*
+
+data/
+backtest_results/
