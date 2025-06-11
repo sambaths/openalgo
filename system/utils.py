@@ -9,6 +9,11 @@ from psycopg2.errors import UndefinedTable
 import multiprocessing
 import time
 from logger import logger
+from bs4 import BeautifulSoup
+import re
+import os
+from datetime import datetime
+from typing import Dict, Optional
 
 import logging
 
@@ -364,3 +369,164 @@ def monitor_manager_health(shared_state, shared_lock, interval=30):
     monitor_thread = threading.Thread(target=health_monitor, daemon=True)
     monitor_thread.start()
     return monitor_thread
+
+
+def get_amfi_symbol_categorization() -> Dict[str, str]:
+    """
+    Fetch the latest NSE symbol to market cap categorization mapping from AMFI.
+    
+    Returns:
+        Dict[str, str]: Dictionary mapping NSE symbols to their market cap categories
+        
+    Example:
+        {
+            "RELIANCE": "Large Cap",
+            "TCS": "Large Cap", 
+            "ADANIPORTS": "Mid Cap",
+            ...
+        }
+    """
+    try:
+        # AMFI research page URL
+        base_url = "https://www.amfiindia.com"
+        research_page = "https://www.amfiindia.com/research-information/other-data/categorization-of-stocks"
+        
+        # Set up session with headers
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        logger.debug("Fetching latest AMFI market cap categorization data...")
+        
+        # Try to get the latest Excel file URL from the research page
+        try:
+            response = session.get(research_page, timeout=30)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Look for Excel file links containing market cap data
+            excel_links = []
+            for link in soup.find_all('a', href=True):
+                href = link.get('href')
+                if href and ('AverageMarketCapitalization' in href or 'MarketCap' in href) and href.endswith('.xlsx'):
+                    if not href.startswith('http'):
+                        href = base_url + href
+                    excel_links.append(href)
+            
+            if excel_links:
+                # Sort by date in filename to get the most recent
+                def extract_date_from_filename(url: str) -> datetime:
+                    try:
+                        match = re.search(r'(\d{2})(\w{3})(\d{4})', url)
+                        if match:
+                            day, month_str, year = match.groups()
+                            month_map = {
+                                'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+                                'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
+                            }
+                            month = month_map.get(month_str, 12)
+                            return datetime(int(year), month, int(day))
+                        return datetime(1900, 1, 1)
+                    except:
+                        return datetime(1900, 1, 1)
+                
+                excel_links.sort(key=extract_date_from_filename, reverse=True)
+                latest_url = excel_links[0]
+                logger.debug(f"Found latest market cap file: {latest_url}")
+            else:
+                # Fallback to known URL
+                latest_url = "https://www.amfiindia.com/Themes/Theme1/downloads/AverageMarketCapitalizationoflistedcompaniesduringthesixmonthsended31Dec2024.xlsx"
+                logger.debug("Using fallback URL for market cap data")
+                
+        except Exception as e:
+            logger.debug(f"Could not scrape research page: {e}, using fallback URL")
+            latest_url = "https://www.amfiindia.com/Themes/Theme1/downloads/AverageMarketCapitalizationoflistedcompaniesduringthesixmonthsended31Dec2024.xlsx"
+        
+        # Download and process the Excel file
+        logger.debug("Downloading and processing market cap data...")
+        response = session.get(latest_url, timeout=60)
+        response.raise_for_status()
+        
+        # Use a temporary file
+        temp_filename = f"temp_amfi_{int(time.time())}.xlsx"
+        try:
+            with open(temp_filename, 'wb') as f:
+                f.write(response.content)
+            
+            # Read and process the Excel file - first try with default header
+            df = pd.read_excel(temp_filename, engine='openpyxl')
+            
+            # Check if the actual headers are in the second row (common in AMFI files)
+            # Look at the first few rows to determine the correct header row
+            header_row = 1
+            # for row_idx in range(min(3, len(df))):
+            #     row_values = [str(val).lower() for val in df.iloc[row_idx].values if str(val) != 'nan']
+            #     # Check if this row contains header-like terms
+            #     if any(term in ' '.join(row_values) for term in ['symbol', 'nse', 'categorization', 'company', 'scrip']):
+            #         header_row = row_idx
+            #         logger.debug(f"Found headers in row {row_idx + 1}")
+            #         break
+            
+            # Re-read with correct header row if needed
+            if header_row > 0:
+                df = pd.read_excel(temp_filename, engine='openpyxl', header=header_row)
+                logger.debug(f"Re-reading Excel with header at row {header_row + 1}")
+            
+            # Find relevant columns
+            symbol_cols = []
+            category_cols = []
+            
+            logger.debug(f"Available columns: {list(df.columns)}")
+            
+            # Look for symbol columns (NSE, Symbol, etc.)
+            for col in df.columns:
+                col_str = str(col).lower()
+                if any(term in col_str for term in ['nse symbol']):
+                    symbol_cols.append(col)
+            
+            # Look for categorization columns (usually the last column or contains 'category', 'cap', etc.)
+            for col in df.columns:
+                col_str = str(col).lower()
+                if any(term in col_str for term in ['categorization']):
+                    category_cols.append(col)
+            
+            # If no specific category column found, use the last column
+            if not category_cols and len(df.columns) > 1:
+                category_cols = [df.columns[-1]]
+            
+            logger.debug(f"Found symbol columns: {symbol_cols}")
+            logger.debug(f"Found category columns: {category_cols}")
+            
+            # Extract the mapping
+            symbol_category_mapping = {}
+            
+            if symbol_cols and category_cols:
+                symbol_col = symbol_cols[0]  # Use first symbol column
+                category_col = category_cols[0]  # Use first category column
+                
+                logger.debug(f"Using symbol column: {symbol_col}, category column: {category_col}")
+                
+                for _, row in df.iterrows():
+                    symbol = str(row[symbol_col]).strip()
+                    category = str(row[category_col]).strip()
+                    
+                    # Skip empty or invalid entries
+                    if symbol and category and symbol != 'nan' and category != 'nan':
+                        symbol_category_mapping[symbol] = category
+            
+            logger.debug(f"Successfully extracted {len(symbol_category_mapping)} symbol-category mappings")
+            return symbol_category_mapping
+            
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_filename):
+                os.remove(temp_filename)
+                
+    except Exception as e:
+        logger.error(f"Error fetching AMFI market cap categorization: {e}")
+        return {}
+
+if __name__ == "__main__":
+    print(stock_symbols())

@@ -20,6 +20,11 @@ from rich.panel import Panel
 import warnings
 from pathlib import Path
 import importlib
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
+
 from fyers_utils import FyersBroker
 from data_provider import get_data_provider
 from cost_calculator import FeeConfig, TransactionCostCalculator
@@ -47,6 +52,13 @@ plt.rcParams.update({
     'lines.linewidth': 2,
     'grid.alpha': 0.3
 })
+
+if os.environ.get('LOG_LEVEL', None) is None:
+    os.environ['LOG_LEVEL'] = "INFO"
+
+import logging
+logger = logging.getLogger()
+logger.setLevel(getattr(logging, os.environ.get("DEBUG_LEVEL", "INFO").upper(), logging.INFO))
 
 # Constants
 IST = pytz.timezone('Asia/Kolkata')

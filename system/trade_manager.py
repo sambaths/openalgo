@@ -133,7 +133,7 @@ class TradeManager:
                 exchange=exchange,
                 price_type=price_type,
                 product=product,
-                quantity=quantity,
+                quantity=quantity if action.lower() == 'BUY' else -1 * quantity,
             )
 
     def _get_order_status_with_simulation_check(self, order_id, strategy):
