@@ -78,6 +78,7 @@ class RiskManager:
         self.max_trade_id = None
         self.price_tracker = {}
         self.force_exit_triggered_symbols = {}
+        self.incremented_trade_id = None
 
         logger.debug(
             f"{self.__class__.__name__} initialized with total_capital={self.total_capital}, "
@@ -421,7 +422,7 @@ class RiskManager:
                 
                 db_handler.insert_records(
                     TradeLog(
-                        trade_id=trade_record["trade_id"],
+                        trade_id=self.max_trade_id + trade_record["trade_id"],
                         trade_date=trade_record["entry_time"].date(),
                         symbol=trade_record["symbol"],
                         entry_time=trade_record["entry_time"],

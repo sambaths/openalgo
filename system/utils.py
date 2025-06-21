@@ -14,6 +14,7 @@ import re
 import os
 from datetime import datetime
 from typing import Dict, Optional
+import pytz
 
 import logging
 
@@ -527,6 +528,75 @@ def get_amfi_symbol_categorization() -> Dict[str, str]:
     except Exception as e:
         logger.error(f"Error fetching AMFI market cap categorization: {e}")
         return {}
+
+
+def structure_data(ticker: str, data: dict) -> pd.DataFrame:
+    """
+    Structure data into a standard format for backtesting.
+    
+    Args:
+        ticker: Stock ticker symbol
+        data: Raw data from Fyers API
+        
+    Returns:
+        pd.DataFrame: Structured DataFrame with required fields
+    """
+
+    IST = pytz.timezone('Asia/Kolkata')
+
+    # Check if data is already a DataFrame
+    if isinstance(data, pd.DataFrame):
+        return data
+        
+    # Handle empty or invalid responses
+    if not isinstance(data, dict) or 'candles' not in data or not data['candles']:
+        return pd.DataFrame()  # Return empty DataFrame
+        
+    # Create DataFrame from fetched data
+    df = pd.DataFrame(data['candles'], columns=['t', 'o', 'h', 'l', 'c', 'v'])
+    
+    # Convert timestamp to datetime with proper timezone
+    df['datetime'] = pd.to_datetime(df['t'], unit='s').dt.tz_localize(pytz.UTC).dt.tz_convert(IST)
+    
+    # Calculate cumulative volume
+    df['cum_vol'] = df['v'].cumsum()
+    # Calculate previous close price using shift
+    df['prev_close'] = df['c'].shift(1).fillna(df['o'].iloc[0])
+
+    # Calculate change and change percentage
+    df['ch'] = df['c'] - df['prev_close']
+    df['chp'] = (df['ch'] / df['prev_close'] * 100).fillna(0)
+
+    # Calculate average trade price
+    df['avg_trade_price'] = (df['o'] + df['h'] + df['l'] + df['c']) / 4
+
+    # Prepare the final DataFrame with required metrics
+    metrics_df = pd.DataFrame({
+        'datetime': df['datetime'],  # Keep the datetime column as is
+        'symbol': ticker,
+        'ltp': df['c'].round(2),
+        'vol_traded_today': df['cum_vol'].astype(int),
+        'last_traded_time': df['t'].astype(int),
+        'exch_feed_time': df['t'].astype(int),
+        'bid_size': 0,
+        'ask_size': 0,
+        'bid_price': (df['c'] - 0.05).round(2),
+        'ask_price': (df['c'] + 0.05).round(2),
+        'last_traded_qty': df['v'].astype(int),
+        'tot_buy_qty': (df['cum_vol'] // 2).astype(int),
+        'tot_sell_qty': (df['cum_vol'] - (df['cum_vol'] // 2)).astype(int),
+        'avg_trade_price': df['avg_trade_price'].round(2),
+        'low_price': df['l'].round(2),
+        'high_price': df['h'].round(2),
+        'open_price': df['o'].round(2),
+        'prev_close_price': df['prev_close'].round(2),
+        'type': "historical",
+        'ch': df['ch'].round(2),
+        'chp': df['chp'].round(2)
+    })
+    
+    return metrics_df
+
 
 if __name__ == "__main__":
     print(stock_symbols())

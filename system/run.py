@@ -2,6 +2,8 @@ if __name__ == "__main__":
     import os, sys
     import logging
 
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
     # Custom imports
     from utils import load_config
     from system.misc.db_cleanup import delete_day_data
@@ -35,7 +37,7 @@ if __name__ == "__main__":
 
     # Set the simulation type to live or historical
     os.environ["SIMULATION_TYPE"] = config["trading_setting"]["simulation_type"].lower()
-    # delete_database_tables(['market_data', 'stock_signals', 'trade_log', 'active_trades', 'capital_log'])
+    delete_database_tables(['market_data', 'stock_signals', 'trade_log', 'active_trades', 'capital_log'])
     initialize_database()
     delete_day_data(trading_date)
     driver = Driver(config)

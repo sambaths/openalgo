@@ -133,7 +133,7 @@ class TradeManager:
                 exchange=exchange,
                 price_type=price_type,
                 product=product,
-                quantity=quantity if action.lower() == 'BUY' else -1 * quantity,
+                quantity=quantity, # quantity if action.lower() == 'buy' else -1 * quantity,
             )
 
     def _get_order_status_with_simulation_check(self, order_id, strategy):
@@ -177,12 +177,12 @@ class TradeManager:
         if order_id:
             try:
                 order_status_response = self._get_order_status_with_simulation_check(order_id, "Python")
-                logger.debug(f"Order Status for Order ID {order_id}: {order_status_response}")
+                logger.info(f"Order Status for Order ID {order_id}: {order_status_response}")
                 
                 # Check if order is actually completed
                 if order_status_response.get("data", {}).get("order_status", "").lower() in ["complete", "executed", "filled"]:
                     order_completed = True
-                    logger.debug(f"Order {order_id} is completed/executed")
+                    logger.info(f"Order {order_id} is completed/executed")
                 else:
                     logger.warning(f"Order {order_id} is not completed yet. Status: {order_status_response.get('data', {}).get('order_status', 'Unknown')}")
                     
@@ -194,7 +194,7 @@ class TradeManager:
     def process_signal(self, signal):
         """Process a trade signal"""
         lock = self.lock
-        logger.debug(f"TradeTracker: {self.trade_tracker}")
+        logger.info(f"TradeTracker: {self.trade_tracker}")
         
         try:
             # Track Prices for Getting Returns
@@ -276,6 +276,7 @@ class TradeManager:
                             logger.info(
                                 f"Trading stopped. Reason: {self.halt_trading_reason}"
                             )
+                        logger.info(f"CEHCK ---- {signal['symbol']} - {signal['price']} - {signal['stop_loss']} - {get_oa_symbol(signal['symbol'], 'NSE')}")
                         # Evaluate if we will take this trade or not
                         assessment = self.risk_manager.assess_trade(
                             get_oa_symbol(signal["symbol"], "NSE"), signal["price"], signal["stop_loss"]

@@ -2,6 +2,8 @@ import queue
 from multiprocessing import Process, Lock
 import logging, os
 from logger import logger
+import pandas as pd
+import importlib
 
 logger.setLevel(getattr(logging, os.environ["DEBUG_LEVEL"].upper(), None))
 from threading import Thread
@@ -38,7 +40,7 @@ class MarketDataHandler:
     """
 
     def __init__(
-        self, signal_processor=None, aggregation_resolution=None, risk_manager=None, shared_state=None, shared_lock=None, config=None
+        self, signal_processor=None, aggregation_resolution=None, risk_manager=None, shared_state=None, shared_lock=None, config=None, historical_data=None
     ):
         logger.debug("Initializing MarketDataHandler.")
         # Create process-local database connection
@@ -55,12 +57,13 @@ class MarketDataHandler:
         self.risk_manager = risk_manager
         self.shared_state = shared_state
         self.shared_lock = shared_lock
+        self.historical_data = historical_data
         
         # Initialize strategy manager if config is provided
         if config:
             try:
                 self.strategy_manager = create_strategy_manager(config)
-                logger.info("StrategyManager initialized successfully")
+                logger.debug("StrategyManager initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize StrategyManager: {e}")
                 logger.warning("Falling back to legacy single-strategy mode")
@@ -87,25 +90,26 @@ class MarketDataHandler:
         try:
             if self.strategy_manager:
                 # Use strategy manager to create appropriate strategy for symbol
+                # print(self.historical_data[self.historical_data["symbol"] == symbol].reset_index(drop=True))
                 processor = self.strategy_manager.create_strategy_instance(
                     symbol=symbol,
-                    historical_data=None,
+                    historical_data=self.historical_data[self.historical_data["symbol"] == symbol].reset_index(drop=True),
                     market_date=None,
                     resolution=None,
-                    lookback_period=100,
-                    use_history=False
+                    # lookback_period=10000,
+                    use_history=True
                 )
-                logger.info(f"Created strategy instance for {symbol}: {processor.__class__.__name__}")
+                logger.debug(f"Created strategy instance for {symbol}: {processor.__class__.__name__}")
             else:
                 # Fallback to legacy mode - import and use the default strategy
                 from strategy.trendscore import EnhancedTrendScoreStrategy
                 processor = EnhancedTrendScoreStrategy(
-                    historical_data=None,
+                    historical_data=self.historical_data[self.historical_data["symbol"] == symbol].reset_index(drop=True),
                     market_date=None,
                     symbol=symbol,
                     resolution=None,
-                    lookback_period=100,
-                    use_history=False
+                    # lookback_period=100,
+                    use_history=True
                 )
                 logger.warning(f"Using legacy default strategy for {symbol}: {processor.__class__.__name__}")
             
@@ -119,12 +123,12 @@ class MarketDataHandler:
             try:
                 from strategy.trendscore import EnhancedTrendScoreStrategy
                 processor = EnhancedTrendScoreStrategy(
-                    historical_data=None,
+                    historical_data=self.historical_data[self.historical_data["symbol"] == symbol].reset_index(drop=True),
                     market_date=None,
                     symbol=symbol,
                     resolution=None,
-                    lookback_period=100,
-                    use_history=False
+                    # lookback_period=100,
+                    use_history=True
                 )
                 logger.warning(f"Emergency fallback to default strategy for {symbol}")
                 self.signal_processors[symbol] = processor
@@ -212,7 +216,7 @@ class MarketDataHandler:
             
             # Update attempt count
             attempt_count = incomplete_trade.get("attempt_count", 1) + 1
-            logger.info(f"Retrying {signal_type} signal for {symbol} (attempt #{attempt_count})")
+            logger.debug(f"Retrying {signal_type} signal for {symbol} (attempt #{attempt_count})")
             
             return merged_signal
         
@@ -239,12 +243,15 @@ class MarketDataHandler:
 
                 if batch:
                     # Process the batch
-                    if self.aggregation_resolution and not any(
-                        data["symbol"] in self.risk_manager.active_trade_symbols
-                        for data in batch
-                    ):
+                    # if self.aggregation_resolution and not any(
+                    #     data["symbol"] in self.risk_manager.active_trade_symbols
+                    #     for data in batch
+                    # ):
+                    if self.aggregation_resolution:
+                        logger.debug(f"Aggregating data and processing batch: {batch}")
                         self.aggregate_data_and_process_batch(batch)
                     else:
+                        logger.debug(f"Inserting Market data to the Database: {batch}")
                         # Insert Market data to the Database
                         self.db_handler.insert_records(
                             records=[MarketData(**records) for records in batch]
@@ -389,6 +396,7 @@ class MarketDataHandler:
 
             # Check if we need to emit the aggregated data
             if self.should_emit_aggregated_data(symbol):
+                logger.debug(f"Emitting Aggregated data for {symbol}")
                 aggregated_record = self.emit_aggregated_data(symbol)
                 self.process_batch(aggregated_record)
 
@@ -414,7 +422,7 @@ class MarketDataHandler:
         """
         Emits the aggregated data for the symbol and resets the aggregation.
         """
-        aggregated_record = {
+        aggregated_record = [{
             "symbol": symbol,
             "last_traded_time": self.aggregated_data[symbol][
                 "last_traded_time"
@@ -459,7 +467,7 @@ class MarketDataHandler:
             "upper_ckt": self.aggregated_data[symbol][
                 "upper_ckt"
             ],  # Upper circuit price
-        }
+        }]
         logger.debug(f"Emitting Aggregated data for {symbol}: {aggregated_record}")
         # Reset the aggregated data for the symbol
         del self.aggregated_data[symbol]
@@ -512,7 +520,7 @@ class MarketDataHandler:
                         try:
                             self.signal_processors[symbol]._discard_signal()
                             self.signal_processors[symbol]._reset_position_tracking()
-                            logger.info(f"Called _discard_signal() for {symbol} due to incomplete entry trade")
+                            logger.debug(f"Called _discard_signal() for {symbol} due to incomplete entry trade")
                         except Exception as e:
                             logger.error(f"Error calling _discard_signal() for {symbol}: {e}")
                         # Continue to next symbol, don't run signal generation
@@ -525,8 +533,8 @@ class MarketDataHandler:
                         processed_signal = self.apply_signal_management(symbol, results)
                         
                         if processed_signal:
-                            if processed_signal["type"]:
-                                logger.debug(f"Putting signal for {symbol} to trade_signal_queue: {processed_signal}")
+                            if processed_signal["type"] in ['entry', 'exit', 'take_profit']:
+                                logger.info(f"Putting signal for {symbol} to trade_signal_queue: {processed_signal}")
                                 self.trade_signal_queue.put(processed_signal)
                             else:
                                 logger.debug(f"Signal for {symbol} was not forwarded to trade_signal_queue because it is not a valid signal (entry, exit, take_profit)")
@@ -619,6 +627,7 @@ class Worker(Process):
         trade_manager,
         shared_state,
         shared_lock,
+        historical_data_cache = ".cache/data"
     ):
         super().__init__()
         self.worker_id = worker_id
@@ -635,7 +644,31 @@ class Worker(Process):
         self.lock = Lock()
         self.shared_state = shared_state
         self.shared_lock = shared_lock
+        self.historical_data_cache = historical_data_cache
+
         logger.debug(f"Worker {self.worker_id} initialized")
+
+    def get_symbol_historical_data(self, symbol):
+        """
+        Get historical data for a given symbol, resolution, start date, and end date
+        """
+        if os.path.exists(f"{self.historical_data_cache}/{symbol.replace(':', '_').replace('-', '_')}.csv"):
+            return pd.read_csv(f"{self.historical_data_cache}/{symbol.replace(':', '_').replace('-', '_')}.csv")
+        else:
+            logger.warning(f"No historical data found for {symbol}")
+            return None
+    
+    def get_historical_data(self):
+
+        # get the historical data for all symbols in one dataframe
+        historical_data = pd.DataFrame()
+        for symbol in self.symbols:
+            symbol_historical_data = self.get_symbol_historical_data(symbol)
+            if symbol_historical_data is not None:
+                historical_data = pd.concat([historical_data, symbol_historical_data])
+            else:
+                logger.warning(f"No historical data found for {symbol}")
+        return historical_data
 
     def print_shared_state_detailed(self):
         """
@@ -707,8 +740,8 @@ class Worker(Process):
             ])
             
             # Print to console
-            for line in output_lines:
-                print(line)
+            # for line in output_lines:
+            #     print(line)
             
             # Also send to logger
             full_output = "\n".join(output_lines)
@@ -737,10 +770,140 @@ class Worker(Process):
             print(error_msg)
             logger.error(error_msg, exc_info=True)
 
+    def _load_strategy_class_from_string(self, strategy_string):
+        """
+        Load strategy class from string specification.
+        
+        Args:
+            strategy_string: String like 'system.strategy.kama.KAMATrendFollowingStrategy'
+            
+        Returns:
+            Strategy class
+        """
+        try:
+            # Split the string into module path and class name
+            module_path, class_name = strategy_string.rsplit('.', 1)
+            
+            # Import the module
+            module = importlib.import_module(module_path)
+            
+            # Get the class
+            strategy_class = getattr(module, class_name)
+            
+            return strategy_class
+            
+        except Exception as e:
+            logger.error(f"Worker {self.worker_id}: Error loading strategy class '{strategy_string}': {e}")
+            raise
+
+    def _get_strategy_for_symbol(self, symbol):
+        """
+        Get the appropriate strategy class for a given symbol based on config.
+        
+        Args:
+            symbol: The symbol to get strategy for
+            
+        Returns:
+            Strategy class
+        """
+        try:
+            # Simple case: strategy_class directly specified in config (like backtest_config.yaml)
+            if 'strategy_class' in self.config:
+                strategy_string = self.config['strategy_class']
+                if isinstance(strategy_string, str):
+                    return self._load_strategy_class_from_string(strategy_string)
+                else:
+                    # Already a class
+                    return strategy_string
+            
+            # Complex case: strategy_config with assignment rules (like config.yaml)
+            elif 'strategy_config' in self.config:
+                strategy_config = self.config['strategy_config']
+                
+                # Check for direct symbol override first
+                stocks_config = strategy_config.get('stocks', {})
+                if symbol in stocks_config and 'strategy' in stocks_config[symbol]:
+                    strategy_string = stocks_config[symbol]['strategy']
+                    # Check if it's already a full path or just a class name
+                    if '.' in strategy_string:
+                        return self._load_strategy_class_from_string(strategy_string)
+                    else:
+                        # Legacy format - construct full path
+                        strategy_string = f"system.strategy.{strategy_string.lower().replace('strategy', '')}.{strategy_string}"
+                        return self._load_strategy_class_from_string(strategy_string)
+                
+                # Apply assignment rules if enabled
+                assignment_rules = strategy_config.get('assignment_rules', [])
+                for rule_group in assignment_rules:
+                    if not rule_group.get('enabled', False):
+                        continue
+                        
+                    rules = rule_group.get('rules', [])
+                    for rule in rules:
+                        condition = rule.get('condition', {})
+                        
+                        # Check symbol-based condition
+                        if 'symbol' in condition and condition['symbol'] == symbol:
+                            strategy_string = rule['strategy']
+                            # Check if it's already a full path or just a class name
+                            if '.' in strategy_string:
+                                return self._load_strategy_class_from_string(strategy_string)
+                            else:
+                                # Legacy format - construct full path
+                                strategy_string = f"system.strategy.{strategy_string.lower().replace('strategy', '')}.{strategy_string}"
+                                return self._load_strategy_class_from_string(strategy_string)
+                        
+                        # Check market_cap-based condition
+                        if 'market_cap' in condition and symbol in stocks_config:
+                            symbol_market_cap = stocks_config[symbol].get('market_cap')
+                            if symbol_market_cap == condition['market_cap']:
+                                strategy_string = rule['strategy']
+                                # Check if it's already a full path or just a class name
+                                if '.' in strategy_string:
+                                    return self._load_strategy_class_from_string(strategy_string)
+                                else:
+                                    # Legacy format - construct full path
+                                    strategy_string = f"system.strategy.{strategy_string.lower().replace('strategy', '')}.{strategy_string}"
+                                    return self._load_strategy_class_from_string(strategy_string)
+                        
+                        # Check sector-based condition
+                        if 'sector' in condition and symbol in stocks_config:
+                            symbol_sector = stocks_config[symbol].get('sector')
+                            if symbol_sector == condition['sector']:
+                                strategy_string = rule['strategy']
+                                # Check if it's already a full path or just a class name
+                                if '.' in strategy_string:
+                                    return self._load_strategy_class_from_string(strategy_string)
+                                else:
+                                    # Legacy format - construct full path
+                                    strategy_string = f"system.strategy.{strategy_string.lower().replace('strategy', '')}.{strategy_string}"
+                                    return self._load_strategy_class_from_string(strategy_string)
+                
+                # Use default strategy if no rules matched
+                default_strategy = strategy_config.get('default_strategy', 'system.strategy.kama.KAMATrendFollowingStrategy')
+                # Check if it's already a full path or just a class name
+                if '.' in default_strategy:
+                    return self._load_strategy_class_from_string(default_strategy)
+                else:
+                    # Legacy format - construct full path
+                    strategy_string = f"system.strategy.{default_strategy.lower().replace('strategy', '')}.{default_strategy}"
+                    return self._load_strategy_class_from_string(strategy_string)
+            
+            # Fallback: use hardcoded default
+            logger.warning(f"Worker {self.worker_id}: No strategy configuration found, using default KAMATrendFollowingStrategy")
+            from strategy.kama import KAMATrendFollowingStrategy
+            return KAMATrendFollowingStrategy
+            
+        except Exception as e:
+            logger.error(f"Worker {self.worker_id}: Error determining strategy for {symbol}: {e}")
+            # Emergency fallback
+            from strategy.kama import KAMATrendFollowingStrategy
+            return KAMATrendFollowingStrategy
+
     def get_or_create_signal_processor(self, symbol):
         """
         Get or create a signal processor (strategy instance) for a given symbol.
-        This is a simplified version for Worker class - actual strategy creation is handled by MarketDataHandler.
+        Now supports dynamic strategy loading based on configuration.
         
         Args:
             symbol: The symbol to get/create strategy for
@@ -749,23 +912,28 @@ class Worker(Process):
             Strategy instance for the symbol
         """
         try:
-            # For the worker class, we just need to create a simple default strategy instance
-            # The actual multi-strategy logic is handled in MarketDataHandler
-            from strategy.trendscore import EnhancedTrendScoreStrategy
-            processor = EnhancedTrendScoreStrategy(
-                historical_data=None,
-                market_date=None,
-                symbol=symbol,
-                resolution=None,
-                lookback_period=100,
-                use_history=False
+            # Get the appropriate strategy class for this symbol
+            strategy_class = self._get_strategy_for_symbol(symbol)
+            
+            # Create strategy instance with appropriate parameters
+            processor = strategy_class(
+                use_history=True
             )
-            logger.debug(f"Worker {self.worker_id}: Created default strategy instance for {symbol}")
+            
+            logger.debug(f"Worker {self.worker_id}: Created {strategy_class.__name__} instance for {symbol}")
             return processor
             
         except Exception as e:
             logger.error(f"Worker {self.worker_id}: Failed to create signal processor for {symbol}: {e}")
-            raise
+            # Emergency fallback
+            try:
+                from strategy.kama import KAMATrendFollowingStrategy
+                processor = KAMATrendFollowingStrategy(use_history=True)
+                logger.warning(f"Worker {self.worker_id}: Emergency fallback to KAMATrendFollowingStrategy for {symbol}")
+                return processor
+            except Exception as fallback_error:
+                logger.critical(f"Worker {self.worker_id}: Complete failure to create strategy for {symbol}: {fallback_error}")
+                raise
 
     def run(self):
         try:
@@ -781,11 +949,12 @@ class Worker(Process):
             # Instantiate MarketDataHandler to process incoming bars
             self.md_handler = MarketDataHandler(
                 signal_processor=base_signal_processor,
-                aggregation_resolution=None,
+                aggregation_resolution=self.config['trading_setting']['aggregation_resolution'],
                 risk_manager=self.risk_manager,
                 shared_state=self.shared_state,
                 shared_lock=self.shared_lock,
-                config=self.config
+                config=self.config,
+                historical_data=self.get_historical_data()
             )
             logger.debug(f"MarketDataHandler initialized")
             # Pass the shared trade signal queue to the handler

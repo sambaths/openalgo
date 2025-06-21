@@ -2,15 +2,19 @@ from multiprocessing import Lock, Manager, Queue
 from threading import Thread
 from datetime import datetime
 import os, requests
-import json
+import json, shutil
+from tqdm import tqdm
+import pandas as pd
 from risk_manager import RiskManager
 from trade_manager import TradeManager
 from worker import Worker
 from broker_simulator import SimulatedWebSocket
 from fyers_utils import FyersBroker
-from utils import validate_shared_state, monitor_manager_health, safe_update_shared_state, safe_get_shared_state
-
+from utils import validate_shared_state, monitor_manager_health, safe_update_shared_state, safe_get_shared_state, structure_data
 from dotenv import load_dotenv
+
+import warnings
+warnings.filterwarnings("ignore")
 
 load_dotenv()
 
@@ -26,10 +30,6 @@ import queue
 
 from db import setup, DBHandler, MarketData, StockSignals
 from strategy_manager import StrategyManager, create_strategy_manager
-
-# Import termination handler
-from websocket_termination_handler import create_termination_handler
-from enhanced_broker_simulator import EnhancedSimulatedWebSocket
 
 
 class OrderStatusManager:
@@ -163,9 +163,9 @@ class Driver:
         response = requests.post(
             f"{os.getenv('HOST_SERVER')}/api/v1/intradaymargin/", json=payload
         )
-        logger.debug(f"{self.__class__.__name__}: Margin response: {response.json()}")
+        logger.info(f"{self.__class__.__name__}: Margin response: {response.json()}")
         self.shared_state["margin_dict"] = response.json()["data"]
-        logger.debug(f"{self.__class__.__name__}: Margin dictionary: {response.json()["data"]}")
+        logger.info(f"{self.__class__.__name__}: Margin dictionary: {response.json()["data"]}")
         # Get funds from OpenAlgo API and validate
         logger.debug("Getting funds information from OpenAlgo API...")
         try:
@@ -195,7 +195,7 @@ class Driver:
 
         # Get starting capital from config
         config_capital = config["capital_management"]["starting_capital"]
-        logger.debug(f"Starting capital from config: ₹{config_capital:,.2f}")
+        logger.info(f"Starting capital from config: ₹{config_capital:,.2f}")
 
         # Apply funds validation logic
         if LIVE_DATA:
@@ -300,6 +300,38 @@ class Driver:
             self.health_monitor_thread = monitor_manager_health(self.shared_state, self.shared_lock)
         else:
             logger.error("Shared state validation failed for Driver - this may cause issues!")
+
+        historical_data_resolution = self.config['trading_setting']['resolution']
+        save_loc = ".cache/data"
+        os.makedirs(save_loc, exist_ok=True)
+        broker = FyersBroker()
+        data_availability_count = {"available": 0, "not_available": 0}
+        for symbol in tqdm(self.symbols, desc="Downloading historical data"):
+            formatted_symbol = f"NSE:{symbol}-EQ" if not symbol.startswith("NSE") else symbol
+            data = broker.get_history(
+                formatted_symbol, 
+                historical_data_resolution, 
+                start_date=(pd.to_datetime(self.config['trading_setting']['trading_date'] if not self.config['trading_setting']['simulation'] else self.config['trading_setting']['simulation_date']) - pd.Timedelta(days=21)).strftime("%Y-%m-%d"),
+                end_date=pd.to_datetime(self.config['trading_setting']['trading_date'] if not self.config['trading_setting']['simulation'] else self.config['trading_setting']['simulation_date']).strftime("%Y-%m-%d")
+            )
+            data = structure_data(formatted_symbol, data)
+
+            if data is None or len(data) == 0:
+                logger.error(f"No data available for {formatted_symbol}")
+                data_availability_count["not_available"] += 1
+            else:   
+                # Save with a consistent naming pattern that matches what StrategyAdapter expects
+                symbol_clean = formatted_symbol.replace(':', '_').replace('-', '_')
+                data.to_csv(f"{save_loc}/{symbol_clean}.csv", index=False)
+                data_availability_count["available"] += 1
+
+        logger.info(f"Historical data downloaded and saved to {save_loc}")
+        logger.info(f"Data availability count: {data_availability_count} for {historical_data_resolution} resolution")
+        if data_availability_count["not_available"] > 0:
+            logger.warning(f"❌ No data available for {data_availability_count['not_available']} symbols")
+            logger.warning(f"❌ Please check if the symbols are correct and the data is available")
+
+
 
     def start_workers(self):
         """Start all worker processes"""
@@ -407,4 +439,9 @@ class Driver:
             except Exception as e:
                 logger.error(f"Error closing queue for worker {i}: {str(e)}")
 
+        # Remove Historical data saved in .cache/data
+        if os.path.exists(".cache/data"):
+            shutil.rmtree(".cache/data")
+            logger.info("Removed historical data from .cache/data")
+        
         logger.info("[DRIVER] Shutdown complete.")

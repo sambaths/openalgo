@@ -12,7 +12,7 @@ This module provides a centralized strategy management system that allows:
 import logging
 import importlib
 from typing import Dict, List, Any, Optional, Type
-from logger import logger
+from system.logger import logger
 
 
 class StrategyManager:
@@ -35,7 +35,7 @@ class StrategyManager:
             strategy_config: Configuration dictionary containing strategy rules and stock metadata
         """
         self.strategy_config = strategy_config
-        self.default_strategy = strategy_config.get("default_strategy", "EnhancedTrendScoreStrategy")
+        self.default_strategy = strategy_config.get("default_strategy", "system.strategy.kama.KAMATrendFollowingStrategy")
         self.assignment_rules = strategy_config.get("assignment_rules", [])
         self.stocks_metadata = strategy_config.get("stocks", {})
         
@@ -61,7 +61,7 @@ class StrategyManager:
         Dynamically load a strategy class by name.
         
         Args:
-            strategy_name: Name of the strategy class to load
+            strategy_name: Name of the strategy class to load (can be full path or just class name)
             
         Returns:
             Strategy class type
@@ -74,21 +74,30 @@ class StrategyManager:
             return self._strategy_classes[strategy_name]
         
         try:
-            # Strategy module mapping
-            strategy_modules = {
-                "EnhancedTrendScoreStrategy": "strategy.trendscore",
-                "LargeCapStrategy": "strategy.largecap_strategy", 
-                "MidCapStrategy": "strategy.midcap_strategy",
-                "SmallCapStrategy": "strategy.smallcap_strategy"
-            }
-            
-            module_name = strategy_modules.get(strategy_name)
-            if not module_name:
-                raise ImportError(f"Unknown strategy: {strategy_name}")
-            
-            # Import the module and get the class
-            module = importlib.import_module(module_name)
-            strategy_class = getattr(module, strategy_name)
+            # Check if strategy_name is a full path (contains dots)
+            if '.' in strategy_name:
+                # Full path format: "system.strategy.kama.KAMATrendFollowingStrategy"
+                module_path, class_name = strategy_name.rsplit('.', 1)
+                module = importlib.import_module(module_path)
+                strategy_class = getattr(module, class_name)
+            else:
+                # Legacy format: just class name
+                # Strategy module mapping for backward compatibility
+                strategy_modules = {
+                    "EnhancedTrendScoreStrategy": "strategy.trendscore",
+                    "LargeCapStrategy": "strategy.largecap_strategy", 
+                    "MidCapStrategy": "strategy.midcap_strategy",
+                    "SmallCapStrategy": "strategy.smallcap_strategy",
+                    "KAMATrendFollowingStrategy": "strategy.kama"
+                }
+                
+                module_name = strategy_modules.get(strategy_name)
+                if not module_name:
+                    raise ImportError(f"Unknown strategy: {strategy_name}")
+                
+                # Import the module and get the class
+                module = importlib.import_module(module_name)
+                strategy_class = getattr(module, strategy_name)
             
             # Cache the class
             self._strategy_classes[strategy_name] = strategy_class
@@ -113,7 +122,7 @@ class StrategyManager:
             symbol: Stock symbol (e.g., "RELIANCE", "INFY")
             
         Returns:
-            Strategy class name to use for this symbol
+            Strategy class name or full path to use for this symbol
         """
         # Check cache first
         if symbol in self._symbol_strategy_mapping:
@@ -245,17 +254,52 @@ class StrategyManager:
     
     def get_supported_strategies(self) -> List[str]:
         """
-        Get list of supported strategy names.
+        Get list of supported strategy names (both full paths and legacy names).
         
         Returns:
-            List of strategy class names
+            List of strategy class names and full paths
         """
-        return [
+        # Legacy names for backward compatibility
+        legacy_strategies = [
             "EnhancedTrendScoreStrategy",
             "LargeCapStrategy", 
             "MidCapStrategy",
-            "SmallCapStrategy"
+            "SmallCapStrategy",
+            "KAMATrendFollowingStrategy"
         ]
+        
+        # Full path strategies
+        full_path_strategies = [
+            "system.strategy.trendscore.EnhancedTrendScoreStrategy",
+            "system.strategy.kama.KAMATrendFollowingStrategy",
+            # Add more as needed
+        ]
+        
+        return legacy_strategies + full_path_strategies
+    
+    def _is_strategy_supported(self, strategy_name: str) -> bool:
+        """
+        Check if a strategy is supported (either by name or by loading ability).
+        
+        Args:
+            strategy_name: Strategy name or full path to check
+            
+        Returns:
+            True if strategy is supported, False otherwise
+        """
+        # Check if it's in the supported list
+        if strategy_name in self.get_supported_strategies():
+            return True
+        
+        # If it's a full path, try to load it to see if it's valid
+        if '.' in strategy_name:
+            try:
+                self._load_strategy_class(strategy_name)
+                return True
+            except Exception:
+                return False
+        
+        return False
     
     def validate_configuration(self) -> Dict[str, Any]:
         """
@@ -268,15 +312,14 @@ class StrategyManager:
         warnings = []
         
         # Check if default strategy is valid
-        supported_strategies = self.get_supported_strategies()
-        if self.default_strategy not in supported_strategies:
+        if not self._is_strategy_supported(self.default_strategy):
             issues.append(f"Default strategy '{self.default_strategy}' is not supported")
         
         # Check strategy assignments
         assignment_summary = self.get_strategy_assignment_summary()
         
         for strategy_name in assignment_summary.keys():
-            if strategy_name not in supported_strategies:
+            if not self._is_strategy_supported(strategy_name):
                 issues.append(f"Strategy '{strategy_name}' is not supported")
         
         # Check for symbols without metadata
@@ -315,7 +358,7 @@ class StrategyManager:
             new_config: New strategy configuration
         """
         self.strategy_config = new_config
-        self.default_strategy = new_config.get("default_strategy", "EnhancedTrendScoreStrategy")
+        self.default_strategy = new_config.get("default_strategy", "system.strategy.kama.KAMATrendFollowingStrategy")
         self.assignment_rules = new_config.get("assignment_rules", [])
         self.stocks_metadata = new_config.get("stocks", {})
         

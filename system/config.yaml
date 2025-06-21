@@ -2,6 +2,10 @@
 
 env: 'dev' # ['dev', 'prod']
 
+# Strategy configuration - supports both simple and complex modes
+# Simple mode: Specify strategy_class directly
+strategy_class: "system.strategy.kama.KAMATrendFollowingStrategy"
+
 # Postgres Table Names
 tables:
   market_data: market_data
@@ -12,30 +16,30 @@ tables:
 
 capital_management:
   starting_capital: 10000
-  max_allocation: 0.3
+  max_allocation: 0.1
 
 # ============================================================================
 # MULTI-STRATEGY CONFIGURATION
 # ============================================================================
 strategy_config:
-  # Default strategy if no other assignment matches
-  default_strategy: "SmallCapStrategy"
+  # Default strategy if no other assignment matches - using full path
+  default_strategy: "system.strategy.kama.KAMATrendFollowingStrategy"
   
   # Strategy assignment rules (evaluated in order)
   assignment_rules:
     # Rule 1: Market cap based assignment
     - name: "market_cap_assignment"
-      enabled: true
+      enabled: false
       rules:
         - condition:
             market_cap: "large"
-          strategy: "LargeCapStrategy"
+          strategy: "system.strategy.kama.KAMATrendFollowingStrategy"
         - condition:
             market_cap: "mid"
-          strategy: "MidCapStrategy"
+          strategy: "system.strategy.kama.KAMATrendFollowingStrategy"
         - condition:
             market_cap: "small"
-          strategy: "SmallCapStrategy"
+          strategy: "system.strategy.kama.KAMATrendFollowingStrategy"
     
     # Rule 2: Sector based assignment (optional)
     - name: "sector_assignment"
@@ -43,10 +47,10 @@ strategy_config:
       rules:
         - condition:
             sector: "banking"
-          strategy: "LargeCapStrategy"
+          strategy: "system.strategy.kama.KAMATrendFollowingStrategy"
         - condition:
             sector: "pharma"
-          strategy: "MidCapStrategy"
+          strategy: "system.strategy.kama.KAMATrendFollowingStrategy"
     
     # Rule 3: Direct symbol override (highest priority)
     - name: "symbol_override"
@@ -54,59 +58,59 @@ strategy_config:
       rules:
         - condition:
             symbol: "RELIANCE"
-          strategy: "LargeCapStrategy"
+          strategy: "system.strategy.kama.KAMATrendFollowingStrategy"
         - condition:
             symbol: "NATCOPHARM"
-          strategy: "SmallCapStrategy"
+          strategy: "system.strategy.kama.KAMATrendFollowingStrategy"
 
   # Stock definitions with metadata for strategy assignment
   stocks:
     NATCOPHARM:
       market_cap: "small"
       sector: "pharma"
-      # strategy: "SmallCapStrategy"  # Optional direct override
+      # strategy: "system.strategy.kama.KAMATrendFollowingStrategy"  # Optional direct override
       
     ADANIGREEN:
       market_cap: "large" 
       sector: "energy"
-      # strategy: "LargeCapStrategy"  # Optional direct override
+      # strategy: "system.strategy.kama.KAMATrendFollowingStrategy"  # Optional direct override
       
     INFY:
       market_cap: "large"
       sector: "it"
-      # strategy: "LargeCapStrategy"  # Optional direct override
+      # strategy: "system.strategy.kama.KAMATrendFollowingStrategy"  # Optional direct override
       
     TATACONSUM:
       market_cap: "mid"
       sector: "consumer"
-      # strategy: "MidCapStrategy"  # Optional direct override
+      # strategy: "system.strategy.kama.KAMATrendFollowingStrategy"  # Optional direct override
       
     BHARATFORGE:
       market_cap: "mid"
       sector: "auto"
-      # strategy: "MidCapStrategy"  # Optional direct override
+      # strategy: "system.strategy.kama.KAMATrendFollowingStrategy"  # Optional direct override
       
     GOKALDAS:
       market_cap: "small"
       sector: "textile"
-      # strategy: "SmallCapStrategy"  # Optional direct override
+      # strategy: "system.strategy.kama.KAMATrendFollowingStrategy"  # Optional direct override
 
 trading_setting:
-  trading_date: '03-06-2025'
+  trading_date: '20-06-2025'
   confirmation_count: 3 # Number of Confirmation Candles to wait for before entering a trade
   max_trade_duration: 3800 # Number of seconds to hold a trade
   # None or Integer value in seconds
   cooling_period: None 
   # Simulation Related Keys
-  simulation:  True
+  simulation:  true
   simulation_type: 'historical' # historical or live
-  simulation_date: '29-05-2025'
+  simulation_date: '20-06-2025'
   simulation_stocks: None
   # symbols: ['NATCOPHARM'] #, 'ADANIGREEN', 'INFY', 'TATACONSUM'] # , 'JSWSTEEL', 'SHRIRAMFIN', 'AXISBANK', 'MARUTI', 'ADANIPORTS', 'COALINDIA', 'BPCL'] #, 'NESTLEIND', 'LT', 'RELIANCE', 'SBILIFE', 'DRREDDY', 'TATASTEEL', 'BAJAJFINSV', 'SBIN', 'HINDALCO', 'BHARTIARTL', 'EICHERMOT', 'TITAN', 'ADANIENT', 'TATAMOTORS', 'ICICIBANK', 'HDFCLIFE', 'GRASIM', 'TCS', 'ASIANPAINT', 'HEROMOTOCO', 'SUNPHARMA', 'ITC', 'BAJAJ-AUTO', 'HINDUNILVR', 'BRITANNIA', 'M&M', 'ULTRACEMCO', 'BEL', 'TRENT', 'INDUSINDBK']
-  symbols: ["INDGN", "RPOWER", "RCF", "SAGILITY", "TRIDENT", "JPPOWER", "IOB", "IFCI", "UCOBANK", "CENTRALBK", 'NATCOPHARM']
+  symbols: ["GRASIM", "RELIANCE"] #, "HINDALCO", "TATAMOTORS", "AXISBANK", "HDFCBANK", "KOTAKBANK", "HCLTECH", "POWERGRID", "ADANIPORTS", "MARUTI", "SBIN", "ADANIENT", "TRENT", "ICICIBANK", "INFY", "LT"]
   slippage: 0.01 # Slippage in percentage
   commission: 0.0001 # Commission in percentage
-  aggregation_resolution: 1 # Aggregation Resolution for the Market Data
+  aggregation_resolution: null # Aggregation Resolution for the Market Data
   resolution: 1 # Resolution for data fetch via Market Data
 
 scanners:

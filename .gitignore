@@ -62,3 +62,4 @@ system/backtesting.py/*
 
 data/
 backtest_results/
+system/

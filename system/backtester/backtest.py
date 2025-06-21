@@ -1,4 +1,7 @@
+import matplotlib
+matplotlib.use('Agg')
 from dataclasses import dataclass
+import random
 from typing import List, Dict
 import numpy as np
 import pandas as pd
@@ -24,7 +27,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
-
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from fyers_utils import FyersBroker
 from data_provider import get_data_provider
 from cost_calculator import FeeConfig, TransactionCostCalculator
@@ -58,11 +61,34 @@ if os.environ.get('LOG_LEVEL', None) is None:
 
 import logging
 logger = logging.getLogger()
-logger.setLevel(getattr(logging, os.environ.get("DEBUG_LEVEL", "INFO").upper(), logging.INFO))
+logger.setLevel(getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO))
 
 # Constants
 IST = pytz.timezone('Asia/Kolkata')
 console = Console()
+
+
+
+def round_to_tick(price, tick_size=0.05):
+    """Rounds price to the nearest tick size of 0.05."""
+    return round(price / tick_size) * tick_size
+
+import subprocess
+import os
+
+def get_git_root():
+    try:
+        # Get the top-level Git directory path
+        git_root = subprocess.check_output(
+            ['git', 'rev-parse', '--show-toplevel'],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').strip()
+        # Extract the folder name from the path
+        return git_root
+    except subprocess.CalledProcessError:
+        return None  # Not in a Git repo
+
+ROOT_FOLDER = get_git_root()
 
 def convert_to_datetime(timestamp: int) -> datetime:
     return datetime.fromtimestamp(timestamp)
@@ -98,7 +124,7 @@ def calculate_start_date(market_date_str: str, resolution: str, max_lookback_can
     candles_per_day = trading_seconds / (int(resolution) * 60)
     
     # Calculate required days
-    days_required = math.ceil(max_lookback_candles / candles_per_day)
+    days_required = 31 # math.ceil(max_lookback_candles / candles_per_day)
     
     # Add extra days for weekends and holidays (approximately 40% more days)
     days_required = math.ceil(days_required * 1.4)
@@ -275,7 +301,7 @@ class TradeAnalyzer:
         max_drawdown = self._calculate_max_drawdown(equity_curve)
         
         # Calculate risk-adjusted returns
-        risk_free_rate = 0.02  # 2% annual risk-free rate
+        risk_free_rate = 0.075  # 2% annual risk-free rate
         excess_returns = trades_df['returns'] - (risk_free_rate / 252)
         
         sharpe = (np.mean(excess_returns) * np.sqrt(252)) / (np.std(excess_returns) if np.std(excess_returns) != 0 else float('inf'))
@@ -475,7 +501,7 @@ class TradeAnalyzer:
 class BacktestVisualizer:
     """Class to handle visualization of backtest results."""
     
-    def __init__(self, results: Dict[str, StrategyMetrics], trades_data: Dict[str, List[dict]] = None, initial_capital: float = 100000):
+    def __init__(self, results: Dict[str, StrategyMetrics], trades_data: Dict[str, List[dict]] = None, initial_capital: float = 100000, output_dir: str = "."):
         """
         Initialize visualizer with backtest results.
         
@@ -485,6 +511,7 @@ class BacktestVisualizer:
             initial_capital: Initial capital for portfolio calculations
         """
         self.results = results
+        self.output_dir = output_dir
         self.trades_data = trades_data
         self.initial_capital = initial_capital
         self.style_config = {
@@ -509,7 +536,7 @@ class BacktestVisualizer:
         plt.legend()
         plt.grid(True)
         
-        output_path = 'equity_curves.png'
+        output_path = self.output_dir / 'equity_curves.png'
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         return output_path
@@ -527,7 +554,7 @@ class BacktestVisualizer:
         plt.legend()
         plt.grid(True)
         
-        output_path = 'drawdowns.png'
+        output_path = self.output_dir / 'drawdowns.png'
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         return output_path
@@ -544,7 +571,7 @@ class BacktestVisualizer:
         plt.ylabel('Density')
         plt.legend()
         
-        output_path = 'performance_dist.png'
+        output_path = self.output_dir / 'performance_dist.png'
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         return output_path
@@ -589,7 +616,7 @@ class BacktestVisualizer:
         # Format x-axis dates
         plt.gcf().autofmt_xdate()
         
-        output_path = 'portfolio_equity.png'
+        output_path = self.output_dir / 'portfolio_equity.png'
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         return output_path
@@ -639,7 +666,7 @@ class BacktestVisualizer:
         # Format x-axis dates
         plt.gcf().autofmt_xdate()
         
-        output_path = 'portfolio_drawdown.png'
+        output_path = self.output_dir / 'portfolio_drawdown.png'
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         return output_path
@@ -696,7 +723,7 @@ class BacktestVisualizer:
         
         ax.set_yticklabels(month_names, rotation=0)
         
-        output_path = 'monthly_returns_heatmap.png'
+        output_path = self.output_dir / 'monthly_returns_heatmap.png'
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         return output_path
@@ -704,7 +731,7 @@ class BacktestVisualizer:
 class BacktestReporter:
     """Class to generate detailed backtest reports."""
     
-    def __init__(self, results: Dict[str, StrategyMetrics], config: BacktestConfig, trades_data: Dict[str, List[dict]], output_dir: str = "."):
+    def __init__(self, results: Dict[str, StrategyMetrics], config: BacktestConfig, trades_data: Dict[str, List[dict]], output_dir: str = ".", backtest_uuid: str = None):
         """
         Initialize reporter with backtest results and configuration.
         
@@ -718,8 +745,9 @@ class BacktestReporter:
         self.config = config
         self.trades_data = trades_data
         self.output_dir = Path(output_dir)
+        self.backtest_uuid = backtest_uuid
         initial_capital = self.config.config.get('initial_capital', 100000)
-        self.visualizer = BacktestVisualizer(results, trades_data, initial_capital) if results else None
+        self.visualizer = BacktestVisualizer(results, trades_data, initial_capital, output_dir / backtest_uuid) if results else None
         
     def generate_cli_report(self):
         """Generate detailed CLI report using rich."""
@@ -814,7 +842,7 @@ class BacktestReporter:
         # Generate a filename with strategy name and timestamp
         strategy_name = self.config.config['strategy_class'].__name__
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = self.output_dir / f"{strategy_name}_backtest_{timestamp}.xlsx"
+        filename = self.output_dir / self.backtest_uuid / f"{strategy_name}_backtest_{timestamp}.xlsx" if self.backtest_uuid else self.output_dir / f"{strategy_name}_backtest_{timestamp}.xlsx"
         
         wb = Workbook()
         
@@ -1220,7 +1248,7 @@ class Backtest:
         self.results = {}
         self.trades = {}
         self.reporter = None
-        self.output_dir = Path(output_dir)
+        self.output_dir = Path(ROOT_FOLDER) / output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize data provider based on configuration
@@ -1238,15 +1266,19 @@ class Backtest:
         # Keep Fyers broker for margin calculation
         self.fyers_broker = FyersBroker()
         self.margin_dict = self.fyers_broker.get_margin([f"NSE:{ticker}-EQ" for ticker in self.config.config['tickers']])
-
+    
     def run(self):
         """Execute backtest across all tickers."""
+        import uuid
+        self.backtest_uuid = str(uuid.uuid4())[:8]  # Generate single UUID for entire backtest run
+        
         console.print(Panel.fit(
             "[bold cyan]QuantForge Backtesting[/bold cyan]\n"
             f"Strategy: {self.config.config['strategy_class'].__name__}\n"
             f"Period: {self.config.config['start_date']} to {self.config.config['end_date']}\n"
             f"Resolution: {self.config.config['resolution']} minute bars\n"
             f"Initial Capital: {self.config.config['initial_capital']:,}\n"
+            f"Backtest UUID: {self.backtest_uuid}\n"
         ))
         
         successful_tickers = 0
@@ -1261,20 +1293,46 @@ class Backtest:
         ) as progress:
             
             task = progress.add_task("[cyan]Running backtest...", total=len(self.config.config['tickers']), transient=True)
-            
             for i, ticker in enumerate(self.config.config['tickers']):
                 progress.update(task, description=f"[cyan]Processing {ticker} ({i+1}/{len(self.config.config['tickers'])})")
-                if self._backtest_ticker(ticker, progress):
+                if self._backtest_ticker(ticker, progress, self.backtest_uuid):
                     successful_tickers += 1
                 progress.update(task, advance=1)
-                
+
+                    
         if successful_tickers == 0:
             console.print("[red]No successful backtests. Check data availability and configuration.[/red]")
             return
             
         self._generate_reports()
         
-    def _backtest_ticker(self, ticker: str, progress: Progress) -> bool:
+        # Display plotting results summary
+        try:
+            from system.strategy.plotting_system import list_backtest_results
+            results = list_backtest_results()
+            
+            if results:
+                console.print("\n" + "="*60)
+                console.print("[bold green]📊 Interactive Plot Results[/bold green]")
+                console.print("="*60)
+                
+                for result in results[-3:]:  # Show last 3 results
+                    console.print(f"[cyan]UUID:[/cyan] {result['uuid']}")
+                    console.print(f"[cyan]Path:[/cyan] {result['path']}")
+                    console.print(f"[cyan]Plots:[/cyan] {result['html_files']} generated")
+                    # for html_file in result['html_files']:
+                    #     console.print(f"  📈 {html_file}")
+                    console.print("")
+                    
+                console.print(f"[green]✅ Total backtest results available: {len(results)}[/green]")
+                console.print(f"[green]📁 All results stored in: backtest_results/[/green]")
+            else:
+                console.print("[yellow]No plotting results found[/yellow]")
+                
+        except Exception as e:
+            console.print(f"[yellow]Could not display plotting summary: {e}[/yellow]")
+        
+    def _backtest_ticker(self, ticker: str, progress: Progress, backtest_uuid: str) -> bool:
         """
         Run backtest for a single ticker.
         
@@ -1309,7 +1367,11 @@ class Backtest:
         initial_capital = capital
         risk_params = self.config.config['risk_management']
         processor_params = self.config.config['processor_params'].copy()
-        
+        processor_params['symbol'] = ticker
+        processor_params['enable_plotting'] = True
+        processor_params['plotting_dir'] = 'plots'
+        processor_params['backtest_uuid'] = backtest_uuid
+
         slippage_pct = risk_params.get('slippage', 0.001)
         commission_pct = risk_params.get('commission', 0.0025)
         
@@ -1338,7 +1400,6 @@ class Backtest:
         
         # Structure data for processing
         df_all = self._structure_historical_data(ticker, df_all)
-
         # Process each trading day
         for current_date in trading_dates:
             
@@ -1418,7 +1479,6 @@ class Backtest:
             for i, row in df.iterrows():
                 # Generate signal using the run method
                 output = strategy.run(row)
-                
                 # Add time to output
                 output['time'] = row['datetime']
                 
@@ -1440,21 +1500,29 @@ class Backtest:
                         
                         # Process trades based on position type and action type
                         if output['current_position'] == 'long':
+                            # print(output)
                             if output['type'] == 'entry':
                                 original_price = output['price']
-                                entry_price = output['price'] * (1 + slippage_pct)
+                                # entry_price = output['price'] * (1 + slippage_pct)
+                                if random.choice([True, False]):
+                                    entry_price = round_to_tick(output['price'] * (1 + slippage_pct))
+                                else:
+                                    entry_price = round_to_tick(output['price'] * (1 - slippage_pct))
                                 entry_time = output['time']
                                 stop_loss = output['stop_loss']
-                                
                                 # Calculate position size based on risk
-                                stop_loss_distance = output['price'] - output['stop_loss']
+                                stop_loss_distance = abs(output['price'] - output['stop_loss'])
                                 margin_multiplier = self.margin_dict.get(f"NSE:{ticker}-EQ", 1)
                                 position_size = self._calculate_position_size(capital, output['price'], 
                                                                               risk_params['risk_per_trade'],
-                                                                              stop_loss_pct=stop_loss_distance/output['price'],
-                                                                              max_position_size=risk_params['max_position_size'])
-                                position_size = position_size * margin_multiplier
-                                
+                                                                              stop_loss_pct=stop_loss_distance,
+                                                                              max_position_size=risk_params['max_position_size'],
+                                                                              margin_multiplier=margin_multiplier)
+                                # print(position_size, margin_multiplier)
+                                # print(output)
+                                # print(position_size)
+                                position_size = position_size
+                                # print(position_size)
                                 commision_cost = 0
                                 # commision_cost = position_size * commission_pct * entry_price
                                 slippage_cost = (entry_price - original_price) * position_size
@@ -1469,7 +1537,11 @@ class Backtest:
                             elif output['type'] == 'take_profit':
                                 # Calculate take profit price with slippage for long positions (selling)
                                 take_profit_original_price = output['price']
-                                take_profit_price = output['price'] * (1 - slippage_pct)  # Apply slippage to sell price
+                                # take_profit_price = output['price'] * (1 - slippage_pct)  # Apply slippage to sell price
+                                if random.choice([True, False]):
+                                    take_profit_price = round_to_tick(output['price'] * (1 + slippage_pct))
+                                else:
+                                    take_profit_price = round_to_tick(output['price'] * (1 - slippage_pct))
                                 position_to_close = output['position_to_close']
                                 position_closed_tp = position_size * position_to_close
                                 take_profit_time = output['time']
@@ -1499,7 +1571,10 @@ class Backtest:
                             elif output['type'] == 'exit':
                                 # Calculate exit price with slippage for long positions (selling)
                                 exit_original_price = output['price']
-                                exit_price = output['price'] * (1 - slippage_pct)  # Apply slippage to sell price
+                                if random.choice([True, False]):
+                                    exit_price = round_to_tick(output['price'] * (1 + slippage_pct))
+                                else:
+                                    exit_price = round_to_tick(output['price'] * (1 - slippage_pct))
                                 position_to_close = output.get('position_to_close', 1.0)  # Default to closing full position
                                 
                                 # Calculate transaction costs for this exit
@@ -1555,19 +1630,25 @@ class Backtest:
                                 
                                 
                         elif output['current_position'] == 'short':
+                            # print(output)
                             if output['type'] == 'entry':
                                 original_price = output['price']
-                                entry_price = output['price'] * (1 - slippage_pct)
+                                if random.choice([True, False]):
+                                    entry_price = round_to_tick(output['price'] * (1 + slippage_pct))
+                                else:
+                                    entry_price = round_to_tick(output['price'] * (1 - slippage_pct))
                                 entry_time = output['time']
                                 stop_loss = output['stop_loss']
                                 # Calculate position size based on risk
-                                stop_loss_distance = output['stop_loss'] - output['price']
+                                stop_loss_distance = abs(output['stop_loss'] - output['price'])
                                 margin_multiplier = self.margin_dict.get(f"NSE:{ticker}-EQ", 1)
                                 position_size = self._calculate_position_size(capital, output['price'], 
                                                     risk_params['risk_per_trade'],
-                                                    stop_loss_pct=stop_loss_distance/output['price'],
-                                                    max_position_size=risk_params['max_position_size'])
-                                position_size = position_size * margin_multiplier
+                                                    stop_loss_pct=stop_loss_distance,
+                                                    max_position_size=risk_params['max_position_size'],
+                                                    margin_multiplier=margin_multiplier)
+                                position_size = position_size
+                                # print(position_size)
                                 
                                 commision_cost = 0
                                 # commision_cost = position_size * commission_pct * entry_price
@@ -1583,7 +1664,10 @@ class Backtest:
                             elif output['type'] == 'take_profit':
                                 # Calculate take profit price with slippage for short positions (buying)
                                 take_profit_original_price = output['price']
-                                take_profit_price = output['price'] * (1 + slippage_pct)  # Apply slippage to buy price
+                                if random.choice([True, False]):
+                                    take_profit_price = round_to_tick(output['price'] * (1 + slippage_pct))
+                                else:
+                                    take_profit_price = round_to_tick(output['price'] * (1 - slippage_pct))
                                 position_to_close = output['position_to_close']
                                 position_closed_tp = position_size * position_to_close
                                 take_profit_time = output['time']
@@ -1613,7 +1697,10 @@ class Backtest:
                             elif output['type'] == 'exit':
                                 # Calculate exit price with slippage for short positions (buying)
                                 exit_original_price = output['price']
-                                exit_price = output['price'] * (1 + slippage_pct)  # Apply slippage to buy price
+                                if random.choice([True, False]):
+                                    exit_price = round_to_tick(output['price'] * (1 + slippage_pct))
+                                else:
+                                    exit_price = round_to_tick(output['price'] * (1 - slippage_pct))
                                 position_to_close = output.get('position_to_close', 1.0)  # Default to closing full position
                                 
                                 # Calculate transaction costs for this exit
@@ -1672,7 +1759,13 @@ class Backtest:
                         # console.print(f"[red]Error processing trade action: {str(e)}[/red]")
                         import traceback
                         console.print(traceback.format_exc())
-            
+                        
+                strategy.after()
+                
+                # Save plotting session data after each day
+                if hasattr(strategy, '_save_plotting_session'):
+                    strategy._save_plotting_session()
+                    
             # Update tracking variables
             total_gains += daily_gains
             all_data.append(df)
@@ -1681,6 +1774,26 @@ class Backtest:
             progress.update(date_task_id, advance= 100 / len(trading_dates))
         
         progress.remove_task(date_task_id)
+        
+        # Generate backtest plot after all days are processed
+        try:
+            from system.strategy.plotting_system import create_backtest_plot
+            
+            plot_file = create_backtest_plot(
+                symbol=ticker,
+                strategy_name=self.config.config['strategy_class'].__name__,
+                backtest_uuid=backtest_uuid,
+                title=f"{ticker} Backtest Results"
+            )
+            
+            # if plot_file:
+            #     console.print(f"[green]Plot generated: {plot_file}[/green]")
+            # else:
+            #     console.print(f"[yellow]No plot generated for {ticker} (no trades or insufficient data)[/yellow]")
+                
+        except Exception as e:
+            console.print(f"[red]Failed to generate plot for {ticker}: {e}[/red]")
+        
         # No trades were made
         if not all_trades:
             console.print(f"[yellow]No trades generated for {ticker}[/yellow]")
@@ -1805,12 +1918,17 @@ class Backtest:
             return pd.DataFrame()
               
     def _calculate_position_size(self, capital: float, price: float, risk_per_trade:float, 
-                               stop_loss_pct: float, max_position_size: float) -> float:
+                               stop_loss_pct: float, max_position_size: float, margin_multiplier: float = 1) -> float:
         """Calculate position size based on risk parameters."""
+                                        # position_size = self._calculate_position_size(capital, output['price'], 
+                                        #                                       risk_params['risk_per_trade'],
+                                        #                                       stop_loss_pct=stop_loss_distance/output['price'],
+                                        #                                       max_position_size=risk_params['max_position_size'])
         risk_amount = capital * risk_per_trade
-        price_risk = price * stop_loss_pct
+        price_risk = stop_loss_pct # price * stop_loss_pct
+        margin_discount_price = price / margin_multiplier if margin_multiplier else price
         # print(risk_amount, price_risk, risk_amount / price_risk, capital * max_position_size, capital * max_position_size / price)
-        position_size = min(risk_amount / price_risk, capital * max_position_size / price)
+        position_size = min(risk_amount / price_risk, capital * max_position_size / margin_discount_price)
         return int(position_size)
         
     def _generate_reports(self):
@@ -1819,7 +1937,7 @@ class Backtest:
             console.print("[red]No results to report. Check if data fetching was successful for any symbols.[/red]")
             return
         
-        self.reporter = BacktestReporter(self.results, self.config, self.trades, self.output_dir)
+        self.reporter = BacktestReporter(self.results, self.config, self.trades, self.output_dir, backtest_uuid=self.backtest_uuid)
         self.reporter.generate_cli_report()
         self.reporter.generate_excel_report()
 
@@ -1976,8 +2094,16 @@ def main():
     args = parser.parse_args()
     
     try:
+        # Ensure output directory is always relative to project root
+        if not os.path.isabs(args.output):
+            # Find the project root (where this file is located relative to system/backtester/)
+            current_file_dir = Path(__file__).parent  # system/backtester/
+            project_root = current_file_dir.parent.parent  # openalgo/
+            output_dir = project_root / args.output
+        else:
+            output_dir = Path(args.output)
+        
         # Create output directory
-        output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Load configuration
