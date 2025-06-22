@@ -5,7 +5,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from typing import List
 
 DATABASE_URL = os.getenv('DATABASE_URL')
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL,
+    pool_size=300,
+    max_overflow=300,
+    pool_timeout=10,
+    pool_recycle=1800,
+    pool_pre_ping=True
+)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()

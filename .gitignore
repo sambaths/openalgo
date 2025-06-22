@@ -49,3 +49,11 @@ venv.bak/
 
 # Tailwind CSS output
 # **/output.css
+
+# Strategies
+system/strategy/*
+system/logs/*
+system/backtest_results/*
+system/misc/*
+system/docs/*
+system/tests/*
