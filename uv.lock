@@ -1860,7 +1860,7 @@ requires-dist = [
     { name = "holidays", specifier = ">=0.73" },
     { name = "hpack", specifier = "==4.1.0" },
     { name = "httpcore", specifier = "==1.0.7" },
-    { name = "httpx", extras = ["http2"], specifier = "==0.28.1" },
+    { name = "httpx", extras = ["http2"], specifier = ">=0.28.1" },
     { name = "hyper", specifier = ">=0.5.0" },
     { name = "hypercorn", specifier = ">=0.17.3" },
     { name = "hyperframe", specifier = "==6.1.0" },

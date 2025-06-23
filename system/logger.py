@@ -12,7 +12,7 @@ def setup_logging():
 
     # Create the root logger for the package
     logger = logging.getLogger("quantforge")
-    logger.setLevel(logging.DEBUG)
+    # logger.setLevel(logging.INFO)
 
     # Create a TimedRotatingFileHandler: a new log file every day
     log_file = os.path.join(log_dir, "quantforge.log")

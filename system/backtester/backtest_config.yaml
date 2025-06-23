@@ -1,15 +1,16 @@
-tickers: ["INDGN", "RPOWER", "RCF", "SAGILITY", "TRIDENT", "JPPOWER", "IOB", "IFCI", "UCOBANK", "CENTRALBK", "NATCOPHARM"]
-start_date: "2025-01-01"
+# tickers: ["INDGN", "RPOWER", "RCF", "SAGILITY", "TRIDENT", "JPPOWER", "IOB", "IFCI", "UCOBANK", "CENTRALBK", "NATCOPHARM"]
+tickers: ["RELIANCE", "HDFCBANK", "INFY", "TCS"]
+start_date: "2025-05-01"
 end_date: "2025-06-07"
 
 data_provider:
   type: "fyers"
 
-strategy_class: system.strategy.smallcap_strategy.SmallCapStrategy
+strategy_class: system.strategy.kama.KAMATrendFollowingStrategy
 
 processor_params: 
-  # lookback_period: 50
-  use_history: false
+  lookback_period: 10000
+  use_history: true
 
 risk_management:
   max_position_size: 0.33  # Maximum position size as fraction of capital
@@ -34,4 +35,4 @@ risk_management:
       NSE_IPFT_pct: 0.0001               # 0.0001% of turnover
 
 initial_capital: 100000
-resolution: "1"  # 1-minute bars
+resolution: "5S"  # 1-minute bars

@@ -4,6 +4,7 @@ import logging, os
 from logger import logger
 import pandas as pd
 import importlib
+from zoneinfo import ZoneInfo  # Python 3.9+
 
 logger.setLevel(getattr(logging, os.environ["DEBUG_LEVEL"].upper(), None))
 from threading import Thread
@@ -14,6 +15,8 @@ import json
 from db import setup, DBHandler, MarketData, StockSignals
 from strategy_manager import StrategyManager, create_strategy_manager
 
+# Re-usable IST tzinfo instance
+IST = ZoneInfo("Asia/Kolkata")
 
 ###############################################################################
 # MarketDataHandler Class
@@ -276,18 +279,23 @@ class MarketDataHandler:
             # Convert Unix timestamp to a datetime object - ensure it's a numeric value first
             timestamp = data["last_traded_time"]
             if isinstance(timestamp, (int, float)):
-                last_traded_time = datetime.fromtimestamp(timestamp)
+                # Convert epoch → tz-aware IST → naive IST
+                last_traded_time = datetime.fromtimestamp(timestamp, tz=IST).replace(tzinfo=None)
             else:
                 # If it's already a datetime or string, try to handle it appropriately
                 if isinstance(timestamp, str):
                     try:
-                        last_traded_time = datetime.fromisoformat(timestamp)
+                        # Parse ISO string and normalise to IST
+                        dt = datetime.fromisoformat(timestamp)
+                        if dt.tzinfo is not None:
+                            dt = dt.astimezone(IST).replace(tzinfo=None)
+                        last_traded_time = dt
                     except ValueError:
                         # If string format is unknown, log and use current time as fallback
                         logger.warning(
                             f"Could not parse timestamp: {timestamp}, using current time"
                         )
-                        last_traded_time = datetime.now()
+                        last_traded_time = datetime.now(tz=IST).replace(tzinfo=None)
                 else:
                     # If it's already a datetime object, use it directly
                     last_traded_time = timestamp
@@ -595,15 +603,18 @@ class MarketDataHandler:
     def _safe_timestamp_conversion(self, timestamp):
         """Helper method to safely convert various timestamp formats to datetime objects"""
         if isinstance(timestamp, (int, float)):
-            return datetime.fromtimestamp(timestamp)
+            return datetime.fromtimestamp(timestamp, tz=IST).replace(tzinfo=None)
         elif isinstance(timestamp, str):
             try:
-                return datetime.fromisoformat(timestamp)
+                dt = datetime.fromisoformat(timestamp)
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(IST).replace(tzinfo=None)
+                return dt
             except ValueError:
                 logger.warning(
                     f"Could not parse timestamp: {timestamp}, using current time"
                 )
-                return datetime.now()
+                return datetime.now(tz=IST).replace(tzinfo=None)
         else:
             # If it's already a datetime object or something else, return as is
             return timestamp
