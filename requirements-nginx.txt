@@ -61,7 +61,8 @@ matplotlib-inline==0.1.7
 mdurl==0.1.2
 nest-asyncio==1.6.0
 numpy==2.2.4
-openalgo==1.0.13
+# openalgo==1.0.13
+openalgo @ git+https://github.com/sambaths/openalgo-python-library.git
 ordered-set==4.1.0
 packaging==24.1
 pandas==2.2.3
@@ -102,7 +103,7 @@ tzdata==2024.1
 tzlocal==5.2
 urllib3==2.2.2
 wcwidth==0.2.13
-websocket-client==1.8.0
+websocket-client==1.6.1
 websockets==15.0.1
 logzero==1.7.0
 Werkzeug==3.1.2

@@ -344,3 +344,58 @@ class BrokerData:
             
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
+        
+
+    def get_intraday_margin(self, symbols):
+        """
+        Get margin ratio for a list of symbols using Fyers API.
+        Args:
+            symbols: List of trading symbols (OpenAlgo format)
+        Returns:
+            dict: {symbol: margin_ratio}
+        """
+        MARGIN_DICT = {}
+        if isinstance(symbols, str):
+            symbols = [symbols]
+            
+        for symbol in symbols:
+            try:
+                # Get quote for symbol
+                time.sleep(1)
+                quote = self.get_quotes(symbol, "NSE")
+                ltp = quote.get('ltp', 0)
+                if not ltp:
+                    MARGIN_DICT[symbol] = None
+                    continue
+
+                # Prepare order template
+                order_template = [{
+                    "symbol": get_br_symbol(symbol, "NSE"),
+                    "qty": 1,
+                    "side": 1,
+                    "type": 2,
+                    "productType": "INTRADAY",
+                    "limitPrice": 0.0,
+                    "stopLoss": 0.0,
+                    "stopPrice": 0.0,
+                    "takeProfit": 0.0
+                }]
+                payload = {"data": order_template}
+                
+                # Call Fyers margin API
+                response = get_api_response("/api/v3/multiorder/margin", self.auth_token, method="POST", payload=payload)
+                if response.get('code') == 200 and 'data' in response and 'margin_total' in response['data']:
+                    margin_total = response['data']['margin_total']
+                    if margin_total:
+                        margin_ratio = round(ltp / margin_total)
+                        MARGIN_DICT[symbol] = margin_ratio
+                    else:
+                        MARGIN_DICT[symbol] = None
+                else:
+                    MARGIN_DICT[symbol] = None
+            except Exception as e:
+                logger.error(f"Error getting margin for {symbol}: {str(e)}")
+                MARGIN_DICT[symbol] = None
+            time.sleep(1)
+        return MARGIN_DICT    
+

@@ -34,3 +34,7 @@ class TickerSchema(Schema):
     to = fields.Str(required=True)          # YYYY-MM-DD or millisecond timestamp
     adjusted = fields.Bool(required=False, default=True)  # Adjust for splits
     sort = fields.Str(required=False, default='asc', validate=lambda x: x in ['asc', 'desc'])  # Sort direction
+
+class IntradayMarginSchema(Schema):
+    apikey = fields.Str(required=True)
+    symbols = fields.List(fields.Str(), required=True)
