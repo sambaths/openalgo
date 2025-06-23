@@ -1,6 +1,5 @@
 import os
 import json
-import logging
 import hashlib
 import base64
 import time
@@ -9,9 +8,11 @@ from datetime import datetime
 import requests
 import pyotp
 from urllib.parse import parse_qs, urlparse
+from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
-# Set up logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
 
 def getEncodedString(string):
     return base64.b64encode(str(string).encode("ascii")).decode("ascii")
