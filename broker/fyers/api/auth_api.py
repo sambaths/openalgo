@@ -110,7 +110,7 @@ def authenticate_broker_normal(request_token: str) -> Tuple[Optional[str], Optio
                 }
             })
             
-            logger.info("Successfully authenticated with FYERS API")
+            logger.debug("Successfully authenticated with FYERS API")
             return access_token, response_data
             
         else:
@@ -121,8 +121,8 @@ def authenticate_broker_normal(request_token: str) -> Tuple[Optional[str], Optio
             return None, response_data
             
     except Exception as e:
-        error_msg = f"Authentication failed: {str(e)}"
-        logger.error(error_msg, exc_info=True)
+        error_msg = f"Authentication failed: {e}"
+        logger.exception("Authentication failed due to an unexpected error")
         response_data['message'] = error_msg
         return None, response_data
     
