@@ -1,7 +1,10 @@
 # tickers: ["INDGN", "RPOWER", "RCF", "SAGILITY", "TRIDENT", "JPPOWER", "IOB", "IFCI", "UCOBANK", "CENTRALBK", "NATCOPHARM"]
-tickers: ["RELIANCE", "HDFCBANK", "INFY", "TCS"]
-start_date: "2025-05-01"
-end_date: "2025-06-07"
+tickers: ["RELIANCE", "BHARTIARTL", "ICICIBANK", "SBIN", "INFY", "BAJFINANCE", "HCLTECH", "SUNPHARMA", "AXISBANK", "BAJAJFINSV", "ADANIPORTS", "SBILIFE", "TECHM", "DRREDDY", "TATACONSUM", "JSWSTEEL", "COALINDIA", "NTPC", "HINDALCO", "CIPLA"]
+
+start_date: "2025-03-15"
+end_date: "2025-07-09"
+
+log_level: "CRITICAL"
 
 data_provider:
   type: "fyers"
@@ -13,8 +16,8 @@ processor_params:
   use_history: true
 
 risk_management:
-  max_position_size: 0.33  # Maximum position size as fraction of capital
-  risk_per_trade: 0.02  # Risk 2% of capital per trade
+  max_position_size: 0.2 # Maximum position size as fraction of capital
+  risk_per_trade: 0.03  # Risk 2% of capital per trade
   slippage: 0.0001 # 0.001       # Slippage as fraction of price
   commission: 0 # 0.0025    # Simple commission model (legacy)
   
@@ -35,4 +38,4 @@ risk_management:
       NSE_IPFT_pct: 0.0001               # 0.0001% of turnover
 
 initial_capital: 100000
-resolution: "5S"  # 1-minute bars
+resolution: "5"  # 1-minute bars

@@ -6,7 +6,7 @@ import pandas as pd
 import importlib
 from zoneinfo import ZoneInfo  # Python 3.9+
 
-logger.setLevel(getattr(logging, os.environ["DEBUG_LEVEL"].upper(), None))
+# logger.setLevel(getattr(logging, os.environ["DEBUG_LEVEL"].upper(), None))
 from threading import Thread
 from datetime import datetime
 import time
@@ -304,15 +304,15 @@ class MarketDataHandler:
             if symbol not in self.aggregated_data:
                 self.aggregated_data[symbol] = {
                     "open_price": data[
-                        "ltp"
+                        "open_price"
                     ],  # Opening price is the first price in the period
                     "high_price": data[
-                        "ltp"
+                        "high_price"
                     ],  # High price starts as the last traded price
                     "low_price": data[
-                        "ltp"
+                        "low_price"
                     ],  # Low price starts as the last traded price
-                    "close_price": data[
+                    "ltp": data[
                         "ltp"
                     ],  # Close price will be updated to the last price
                     "vol_traded_today": data[
@@ -340,12 +340,12 @@ class MarketDataHandler:
             else:
                 # Update the aggregated data
                 self.aggregated_data[symbol]["high_price"] = max(
-                    self.aggregated_data[symbol]["high_price"], data["ltp"]
+                    self.aggregated_data[symbol]["high_price"], data["high_price"]
                 )
                 self.aggregated_data[symbol]["low_price"] = min(
-                    self.aggregated_data[symbol]["low_price"], data["ltp"]
+                    self.aggregated_data[symbol]["low_price"], data["low_price"]
                 )
-                self.aggregated_data[symbol]["close_price"] = data[
+                self.aggregated_data[symbol]["ltp"] = data[
                     "ltp"
                 ]  # Last price is the close
                 self.aggregated_data[symbol]["vol_traded_today"] += data[
@@ -386,7 +386,7 @@ class MarketDataHandler:
                 ]  # Update upper circuit price
                 # Calculate price change and percentage change
                 self.aggregated_data[symbol]["ch"] = (
-                    self.aggregated_data[symbol]["close_price"]
+                    self.aggregated_data[symbol]["ltp"]
                     - self.aggregated_data[symbol]["open_price"]
                 )
                 self.aggregated_data[symbol]["chp"] = (
@@ -441,7 +441,7 @@ class MarketDataHandler:
             "open_price": self.aggregated_data[symbol]["open_price"],
             "high_price": self.aggregated_data[symbol]["high_price"],
             "low_price": self.aggregated_data[symbol]["low_price"],
-            "close_price": self.aggregated_data[symbol]["close_price"],
+            "ltp": self.aggregated_data[symbol]["ltp"],
             "volume": self.aggregated_data[symbol][
                 "vol_traded_today"
             ],  # Today's traded volume
@@ -550,6 +550,42 @@ class MarketDataHandler:
                             if "trade_id" in result_copy:
                                 result_copy.pop("trade_id")
                             self.db_handler.insert_records(StockSignals(**result_copy))
+
+                            # Begin latency logging similar to Driver
+                            current_ts = time.time()
+                            if not hasattr(self, "_last_signal_time_print"):
+                                self._last_signal_time_print = current_ts
+                            # Log every 30 seconds
+                            if current_ts - getattr(self, "_last_signal_time_print", 0) >= 30:
+                                # Extract timestamps
+                                data_time_val = (
+                                    data.get("last_traded_time")
+                                    or data.get("last_traded_time")
+                                    or data.get("time")
+                                    or "Unknown"
+                                )
+                                sig_time_val = processed_signal.get("time", "Unknown")
+
+                                # Helper to format datetime-like values
+                                def _fmt(ts_val):
+                                    if hasattr(ts_val, "strftime"):
+                                        return ts_val.strftime("%Y-%m-%d %H:%M:%S")
+                                    elif isinstance(ts_val, (int, float)):
+                                        # Convert epoch timestamp to readable datetime
+                                        try:
+                                            dt = datetime.fromtimestamp(ts_val, tz=IST).replace(tzinfo=None)
+                                            return dt.strftime("%Y-%m-%d %H:%M:%S")
+                                        except (ValueError, OSError):
+                                            return f"Invalid timestamp: {ts_val}"
+                                    return str(ts_val)
+
+                                logger.info(
+                                    f"📅 [MarketData] Data Time: {_fmt(data_time_val)} | "
+                                    f"Signal Time: {_fmt(sig_time_val)} | "
+                                    f"System Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                )
+                                self._last_signal_time_print = current_ts
+                            # End latency logging
 
                         else:
                             logger.debug(f"Signal for {symbol} was discarded due to incomplete trade management")

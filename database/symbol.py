@@ -1,8 +1,10 @@
-import os
+import os, sys
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index, or_, and_
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from typing import List
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from utils.logging import get_logger
 
 logger = get_logger(__name__)

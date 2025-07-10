@@ -57,11 +57,13 @@ plt.rcParams.update({
 })
 
 if os.environ.get('LOG_LEVEL', None) is None:
-    os.environ['LOG_LEVEL'] = "INFO"
+    os.environ['LOG_LEVEL'] = "CRITICAL"
 
 import logging
-logger = logging.getLogger()
-logger.setLevel(getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO))
+# logger = logging.getLogger()
+from system.logger import logger
+# logger.setLevel(logging.CRITICAL)
+# logger.setLevel(getattr(logging, os.environ.get("LOG_LEVEL", "DEBUG").upper(), logging.CRITICAL))
 
 # Constants
 IST = pytz.timezone('Asia/Kolkata')
@@ -1402,6 +1404,7 @@ class Backtest:
         df_all = self._structure_historical_data(ticker, df_all)
         # Process each trading day
         for current_date in trading_dates:
+            logger.debug(f"Processing {ticker} on {current_date.strftime('%Y-%m-%d')}")
             
             # Update market date in processor params
             processor_params['market_date'] = current_date.strftime('%Y-%m-%d')
@@ -1478,6 +1481,7 @@ class Backtest:
             daily_gains = 0
             for i, row in df.iterrows():
                 # Generate signal using the run method
+                # print(row['datetime'])
                 output = strategy.run(row)
                 # Add time to output
                 output['time'] = row['datetime']
@@ -1518,15 +1522,9 @@ class Backtest:
                                                                               stop_loss_pct=stop_loss_distance,
                                                                               max_position_size=risk_params['max_position_size'],
                                                                               margin_multiplier=margin_multiplier)
-                                # print(position_size, margin_multiplier)
-                                # print(output)
-                                # print(position_size)
                                 position_size = position_size
-                                # print(position_size)
                                 commision_cost = 0
-                                # commision_cost = position_size * commission_pct * entry_price
                                 slippage_cost = (entry_price - original_price) * position_size
-                                # capital -= commision_cost
                                 
                                 position_closed_tp = 0
                                 realized_pnl_tp = 0
@@ -1537,7 +1535,6 @@ class Backtest:
                             elif output['type'] == 'take_profit':
                                 # Calculate take profit price with slippage for long positions (selling)
                                 take_profit_original_price = output['price']
-                                # take_profit_price = output['price'] * (1 - slippage_pct)  # Apply slippage to sell price
                                 if random.choice([True, False]):
                                     take_profit_price = round_to_tick(output['price'] * (1 + slippage_pct))
                                 else:
@@ -1648,12 +1645,8 @@ class Backtest:
                                                     max_position_size=risk_params['max_position_size'],
                                                     margin_multiplier=margin_multiplier)
                                 position_size = position_size
-                                # print(position_size)
-                                
                                 commision_cost = 0
-                                # commision_cost = position_size * commission_pct * entry_price
                                 slippage_cost = (original_price - entry_price) * position_size
-                                # capital -= commision_cost
                                 
                                 realized_pnl = 0
                                 realized_pnl_tp = 0
@@ -1750,7 +1743,10 @@ class Backtest:
                                 all_trades.append(trade)
                                 capital +=  net_pnl 
                                 daily_gains += net_pnl
-                        
+
+                            elif output['type'] == 'in position':
+                                pass
+                                
                         else:
                             pass
                             # console.print(f"[yellow]Warning: Unknown position type: {output['current_position']}[/yellow]")

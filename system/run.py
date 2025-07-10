@@ -5,7 +5,7 @@ if __name__ == "__main__":
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
     # Custom imports
-    from utils import load_config
+    from system_utils import load_config
     from system.misc.db_cleanup import delete_day_data
     from logger import logger
 

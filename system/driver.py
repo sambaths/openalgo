@@ -10,7 +10,10 @@ from trade_manager import TradeManager
 from worker import Worker
 from broker_simulator import SimulatedWebSocket
 from fyers_utils import FyersBroker
-from utils import validate_shared_state, monitor_manager_health, safe_update_shared_state, safe_get_shared_state, structure_data
+
+
+
+from system_utils import validate_shared_state, monitor_manager_health, safe_update_shared_state, safe_get_shared_state, structure_data
 from dotenv import load_dotenv
 
 import warnings
@@ -22,7 +25,7 @@ load_dotenv()
 import logging
 from logger import logger
 
-logger.setLevel(getattr(logging, os.environ["DEBUG_LEVEL"].upper(), None))
+# logger.setLevel(getattr(logging, os.environ["DEBUG_LEVEL"].upper(), None))
 
 import threading
 import time

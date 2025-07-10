@@ -15,8 +15,8 @@ tables:
   active_trades: active_trades
 
 capital_management:
-  starting_capital: 10000
-  max_allocation: 0.1
+  starting_capital: 100000
+  max_allocation: 0.2
 
 # ============================================================================
 # MULTI-STRATEGY CONFIGURATION
@@ -96,7 +96,7 @@ strategy_config:
       # strategy: "system.strategy.kama.KAMATrendFollowingStrategy"  # Optional direct override
 
 trading_setting:
-  trading_date: '20-06-2025'
+  trading_date: '27-06-2025'
   confirmation_count: 3 # Number of Confirmation Candles to wait for before entering a trade
   max_trade_duration: 3800 # Number of seconds to hold a trade
   # None or Integer value in seconds
@@ -104,13 +104,13 @@ trading_setting:
   # Simulation Related Keys
   simulation:  true
   simulation_type: 'historical' # historical or live
-  simulation_date: '20-06-2025'
+  simulation_date: '27-06-2025'
   simulation_stocks: None
   # symbols: ['NATCOPHARM'] #, 'ADANIGREEN', 'INFY', 'TATACONSUM'] # , 'JSWSTEEL', 'SHRIRAMFIN', 'AXISBANK', 'MARUTI', 'ADANIPORTS', 'COALINDIA', 'BPCL'] #, 'NESTLEIND', 'LT', 'RELIANCE', 'SBILIFE', 'DRREDDY', 'TATASTEEL', 'BAJAJFINSV', 'SBIN', 'HINDALCO', 'BHARTIARTL', 'EICHERMOT', 'TITAN', 'ADANIENT', 'TATAMOTORS', 'ICICIBANK', 'HDFCLIFE', 'GRASIM', 'TCS', 'ASIANPAINT', 'HEROMOTOCO', 'SUNPHARMA', 'ITC', 'BAJAJ-AUTO', 'HINDUNILVR', 'BRITANNIA', 'M&M', 'ULTRACEMCO', 'BEL', 'TRENT', 'INDUSINDBK']
-  symbols: ["GRASIM", "RELIANCE"] #, "HINDALCO", "TATAMOTORS", "AXISBANK", "HDFCBANK", "KOTAKBANK", "HCLTECH", "POWERGRID", "ADANIPORTS", "MARUTI", "SBIN", "ADANIENT", "TRENT", "ICICIBANK", "INFY", "LT"]
+  symbols: ["RELIANCE", "BHARTIARTL", "ICICIBANK", "SBIN", "INFY", "BAJFINANCE", "HCLTECH", "SUNPHARMA", "AXISBANK", "BAJAJFINSV", "ADANIPORTS", "SBILIFE", "TECHM", "DRREDDY", "TATACONSUM", "JSWSTEEL", "COALINDIA", "NTPC", "HINDALCO", "CIPLA"] #, "HINDALCO", "TATAMOTORS", "AXISBANK", "HDFCBANK", "KOTAKBANK", "HCLTECH", "POWERGRID", "ADANIPORTS", "MARUTI", "SBIN", "ADANIENT", "TRENT", "ICICIBANK", "INFY", "LT"]
   slippage: 0.01 # Slippage in percentage
   commission: 0.0001 # Commission in percentage
-  aggregation_resolution: null # Aggregation Resolution for the Market Data
+  aggregation_resolution: 1 # Aggregation Resolution for the Market Data
   resolution: 1 # Resolution for data fetch via Market Data
 
 scanners:
