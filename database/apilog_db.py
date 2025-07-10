@@ -18,9 +18,11 @@ DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your SQLite path
 
 engine = create_engine(
     DATABASE_URL,
-    pool_size=50,
+    pool_size=300,
     max_overflow=100,
-    pool_timeout=10
+    pool_timeout=10,
+    pool_recycle=1800,
+    pool_pre_ping=True
 )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
@@ -60,4 +62,5 @@ def async_log_order(api_type,request_data, response_data):
     except Exception as e:
         logger.error(f"Error saving order log: {e}")
     finally:
+        db_session.close()
         db_session.remove()

@@ -10,8 +10,8 @@ logger = get_logger(__name__)
 DATABASE_URL = os.getenv('DATABASE_URL')
 engine = create_engine(
     DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
+    pool_size=300,
+    max_overflow=300,
     pool_timeout=10
 )
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
