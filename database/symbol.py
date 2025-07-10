@@ -8,12 +8,11 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
-engine = create_engine(DATABASE_URL,
+engine = create_engine(
+    DATABASE_URL,
     pool_size=300,
     max_overflow=300,
-    pool_timeout=10,
-    pool_recycle=1800,
-    pool_pre_ping=True
+    pool_timeout=10
 )
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()

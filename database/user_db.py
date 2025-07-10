@@ -21,12 +21,12 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 PASSWORD_PEPPER = os.getenv('API_KEY_PEPPER')  # We'll use the same pepper for consistency
 
 # Engine and session setup
-engine = create_engine(DATABASE_URL,
+engine = create_engine(
+    DATABASE_URL, 
+    echo=False,
     pool_size=300,
     max_overflow=300,
-    pool_timeout=10,
-    pool_recycle=1800,
-    pool_pre_ping=True
+    pool_timeout=10
 )
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
