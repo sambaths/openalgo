@@ -9,6 +9,9 @@ import json
 import jwt
 import base64
 import hashlib
+from broker.fyers.api.auth_api import authenticate_broker
+from datetime import datetime
+import pytz
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -555,3 +558,52 @@ def getKotakOTP(userid,access_token):
     data = res.read()
     
     return 'success'
+
+@brlogin_bp.route('/fyers/totp_login', methods=['POST'])
+def fyers_totp_login():
+    try:
+        # Check if user is in session first
+        if 'user' not in session:
+            return jsonify({'status': 'error', 'message': 'User not logged in'}), 401
+            
+        access_token, response = authenticate_broker(request_token=None)
+        print(f"Access token: {access_token}")
+        if access_token:
+            # Replicate handle_auth_success logic but return JSON response
+            from utils.session import get_session_expiry_time, set_session_login_time
+            from database.auth_db import upsert_auth
+            from threading import Thread
+            from utils.auth_utils import async_master_contract_download
+            import logging
+            
+            logger = logging.getLogger(__name__)
+            user_session_key = session['user']
+            broker = 'fyers'
+            
+            # Set session parameters
+            session['logged_in'] = True
+            session['AUTH_TOKEN'] = access_token
+            session['user_session_key'] = user_session_key
+            session['broker'] = broker
+            
+            # Set session expiry and login time
+            app.config['PERMANENT_SESSION_LIFETIME'] = get_session_expiry_time()
+            session.permanent = True
+            set_session_login_time()  # Set the login timestamp
+            
+            logger.info(f"User {user_session_key} logged in successfully with broker {broker}")
+
+            # Store auth token in database
+            inserted_id = upsert_auth(user_session_key, access_token, broker, feed_token=None, user_id=None)
+            if inserted_id:
+                logger.info(f"Database record upserted with ID: {inserted_id}")
+                thread = Thread(target=async_master_contract_download, args=(broker,))
+                thread.start()
+                return jsonify({'status': 'success', 'access_token': access_token})
+            else:
+                logger.error(f"Failed to upsert auth token for user {user_session_key}")
+                return jsonify({'status': 'error', 'message': 'Failed to store authentication token. Please try again.'}), 500
+        else:
+            return jsonify({'status': 'error', 'message': response['message']}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500

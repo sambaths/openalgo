@@ -46,3 +46,7 @@ class ExpirySchema(Schema):
     symbol = fields.Str(required=True)      # Underlying symbol (e.g., NIFTY, BANKNIFTY)
     exchange = fields.Str(required=True)    # Exchange (e.g., NFO, BFO, MCX, CDS)
     instrumenttype = fields.Str(required=True)  # futures or options
+
+class IntradayMarginSchema(Schema):
+    apikey = fields.Str(required=True)
+    symbols = fields.List(fields.Str(), required=True)

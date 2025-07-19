@@ -1,0 +1,41 @@
+# tickers: ["INDGN", "RPOWER", "RCF", "SAGILITY", "TRIDENT", "JPPOWER", "IOB", "IFCI", "UCOBANK", "CENTRALBK", "NATCOPHARM"]
+tickers: ["RELIANCE", "BHARTIARTL", "ICICIBANK", "SBIN", "INFY", "BAJFINANCE", "HCLTECH", "SUNPHARMA", "AXISBANK", "BAJAJFINSV", "ADANIPORTS", "SBILIFE", "TECHM", "DRREDDY", "TATACONSUM", "JSWSTEEL", "COALINDIA", "NTPC", "HINDALCO", "CIPLA"]
+
+start_date: "2025-03-15"
+end_date: "2025-07-09"
+
+log_level: "CRITICAL"
+
+data_provider:
+  type: "fyers"
+
+strategy_class: system.strategy.kama.KAMATrendFollowingStrategy
+
+processor_params: 
+  lookback_period: 10000
+  use_history: true
+
+risk_management:
+  max_position_size: 0.2 # Maximum position size as fraction of capital
+  risk_per_trade: 0.03  # Risk 2% of capital per trade
+  slippage: 0.0001 # 0.001       # Slippage as fraction of price
+  commission: 0 # 0.0025    # Simple commission model (legacy)
+  
+  # Transaction cost model configuration
+  transaction_costs:
+    # Brokerage fees configuration
+    commissions:
+      brokerage_pct: 0.03    # 0.03% fee per trade leg
+      brokerage_cap: 20      # Maximum charge of ₹20 per leg
+
+    # Regulatory charges configuration
+    regulatory_charges:
+      exchange_transaction_pct: 0.00297  # 0.00297% of turnover
+      GST_pct: 0.00069                   # 0.00069% of turnover
+      STT_pct: 0.01321                   # 0.01321% of turnover
+      SEBI_pct: 0.0001                   # 0.0001% of turnover
+      stamp_duty_pct: 0.00142            # 0.00142% of turnover
+      NSE_IPFT_pct: 0.0001               # 0.0001% of turnover
+
+initial_capital: 100000
+resolution: "5"  # 1-minute bars
