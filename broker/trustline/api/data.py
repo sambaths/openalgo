@@ -2,13 +2,13 @@ import json
 import os
 import urllib.parse
 from database.token_db import get_br_symbol, get_oa_symbol, get_brexchange
-from broker.fivepaisaxts.database.master_contract_db import SymToken, db_session
+from broker.trustline.database.master_contract_db import SymToken, db_session
 from flask import session  
 import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
-from broker.fivepaisaxts.baseurl import MARKET_DATA_URL
+from broker.trustline.baseurl import MARKET_DATA_URL
 import pytz
 from utils.logging import get_logger
 
@@ -77,12 +77,12 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
 
 class BrokerData:
     def __init__(self, auth_token, feed_token=None, user_id=None):
-        """Initialize FivepaisaXTS data handler with authentication token"""
+        """Initialize Trustline data handler with authentication token"""
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
         
-        # Map common timeframe format to FivepaisaXTS intervals
+        # Map common timeframe format to Trustline intervals
         self.timeframe_map = {
             "1s": "1", "1m": "60", "2m": "120", "3m": "180", "5m": "300",
                 "10m": "600", "15m": "900", "30m": "1800", "60m": "3600",
@@ -130,7 +130,7 @@ class BrokerData:
 
     def _fetch_market_data(self, token: dict, message_code: int) -> dict:
         """
-        Helper method to fetch market data from FivepaisaXTS API
+        Helper method to fetch market data from Trustline API
         Args:
             token: Dictionary containing exchangeSegment and exchangeInstrumentID
             message_code: XTS message code (e.g., 1502 for market data, 1510 for OI)
@@ -289,7 +289,7 @@ class BrokerData:
             while current_start <= to_date:
                 current_end = min(current_start + timedelta(days=6), to_date)
 
-                # FivepaisaXTS expects MMM DD YYYY HHMMSS in IST
+                # Trustline expects MMM DD YYYY HHMMSS in IST
                 from_str = current_start.strftime('%b %d %Y %H%M%S')
                 to_str = current_end.strftime('%b %d %Y %H%M%S')
 
@@ -312,7 +312,7 @@ class BrokerData:
 
                 if not response or response.get('type') != 'success':
                     logger.error(f"API Response: {response}")
-                    raise Exception(f"Error from FivepaisaXTS API: {response.get('description', 'Unknown error')}")
+                    raise Exception(f"Error from Trustline API: {response.get('description', 'Unknown error')}")
 
                 # Parse dataResponse (pipe-delimited string)
                 raw_data = response.get('result', {}).get('dataReponse', '')
@@ -377,7 +377,7 @@ class BrokerData:
                     response = get_api_response("/instruments/quotes", self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
                     
                     if not response or response.get('type') != 'success':
-                        raise Exception(f"Error from FivepaisaXTS API: {response.get('description', 'Unknown error')}")
+                        raise Exception(f"Error from Trustline API: {response.get('description', 'Unknown error')}")
             
                     # Parse quote data from response
                     raw_quotes = response.get('result', {}).get('listQuotes', [])
